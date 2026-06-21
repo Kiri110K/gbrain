@@ -111,6 +111,55 @@ describe('pickProvider — defensive paths', () => {
     }
   });
 
+  test('Codex fallback token is enough to pick Codex for chat', async () => {
+    let stderr = '';
+    const got = await pickProvider({
+      touchpoint: 'chat',
+      env: { CODEX_ACCESS_TOKEN: 'codex-token' },
+      isTTY: true,
+      writeStderr: (s) => { stderr += s; },
+    });
+    expect(got).not.toBeNull();
+    if (got) {
+      expect(got.recipeId).toBe('codex');
+      expect(got.fullModel).toMatch(/^codex:/);
+      expect(stderr).toContain('codex');
+      expect(stderr).toContain('✓ ready');
+    }
+  });
+
+  test('Codex fallback token is enough to pick Codex for expansion', async () => {
+    let stderr = '';
+    const got = await pickProvider({
+      touchpoint: 'expansion',
+      env: { CODEX_ACCESS_TOKEN: 'codex-token' },
+      isTTY: true,
+      writeStderr: (s) => { stderr += s; },
+    });
+    expect(got).not.toBeNull();
+    if (got) {
+      expect(got.recipeId).toBe('codex');
+      expect(got.fullModel).toMatch(/^codex:/);
+      expect(stderr).toContain('codex');
+      expect(stderr).toContain('✓ ready');
+    }
+  });
+
+  test('Codex is not picked for chat with only OPENAI_API_KEY', async () => {
+    let stderr = '';
+    const got = await pickProvider({
+      touchpoint: 'chat',
+      env: { OPENAI_API_KEY: 'sk-test' },
+      isTTY: true,
+      writeStderr: (s) => { stderr += s; },
+    });
+    expect(got).not.toBeNull();
+    if (got) {
+      expect(got.recipeId).not.toBe('codex');
+      expect(stderr).not.toMatch(/^codex\s/m);
+    }
+  });
+
   test('embedding touchpoint label printed in prompt', async () => {
     let stderr = '';
     await pickProvider({

@@ -165,10 +165,11 @@ describe('queue.add trusted-submit gate for subagent', () => {
     expect(ok.name).toBe('subagent_aggregator');
   });
 
-  test('v0.38 S1.7: subagent with any tool-supporting provider passes the queue gate', async () => {
+  test('v0.38 S1.7: subagent with approved tool-supporting providers passes the queue gate', async () => {
     // v0.38 D6/D7 — the Anthropic pin is removed. The gateway tool loop
-    // routes any provider with native tool calling. Submit-time guard now
-    // refuses ONLY on unusable:no_tools or unknown verdicts.
+    // routes providers with native tool calling AND explicit subagent-loop
+    // approval. Submit-time guard refuses no-tools, no-subagent-loop, and
+    // unknown verdicts.
     const openaiJob = await queue.add(
       'subagent',
       { prompt: 'hi', model: 'openai:gpt-5.2' },
@@ -184,6 +185,12 @@ describe('queue.add trusted-submit gate for subagent', () => {
       { allowProtectedSubmit: true },
     );
     expect(googleJob.name).toBe('subagent');
+  });
+
+  test('subagent with OpenRouter chat model is rejected until supports_subagent_loop is approved', async () => {
+    await expect(
+      queue.add('subagent', { prompt: 'hi', model: 'openrouter:openai/gpt-5.2' }, {}, { allowProtectedSubmit: true }),
+    ).rejects.toThrow(/not approved for the gbrain subagent loop/i);
   });
 
   test('v0.38 S1.7: subagent with Anthropic data.model still succeeds', async () => {

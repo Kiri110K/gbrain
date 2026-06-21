@@ -94,13 +94,49 @@ export interface BrainEngine {
 
 **Slug-based API, not ID-based.** Every method takes slugs, not numeric IDs. The engine resolves slugs to IDs internally. This keeps the interface portable... slugs are strings, IDs are database-specific.
 
-**Embedding is NOT in the engine.** The engine stores embeddings and searches by vector, but it doesn't generate embeddings. `src/core/embedding.ts` handles that. This is intentional: embedding is an external API call (OpenAI), not a storage concern. All engines share the same embedding service.
+**Embedding is NOT in the engine.** The engine stores embeddings and searches by vector, but it doesn't generate embeddings. `src/core/embedding.ts` handles that. This is intentional: embedding is an external provider call (OpenAI or another embedding provider), not a storage concern. All engines share the same embedding service.
 
 **Chunking is NOT in the engine.** Same logic. `src/core/chunkers/` handles chunking. The engine stores and retrieves chunks. All engines share the same chunkers.
 
 **Search returns `SearchResult[]`, not raw rows.** The engine is responsible for its own search implementation (tsvector vs FTS5, pgvector vs sqlite-vss) but must return a uniform result type. RRF fusion and dedup happen above the engine, in `src/core/search/hybrid.ts`.
 
 **`traverseGraph` exists but is engine-specific.** Postgres uses recursive CTEs. SQLite would use a loop with depth tracking. The interface is the same: give me a slug and max depth, return the graph.
+
+**LLM model routing is NOT in the engine.** Chat, text query expansion,
+subagent loops, embeddings, and rerankers are provider concerns configured
+above `BrainEngine`. Codex is intentionally separate from OpenAI-compatible
+providers:
+
+- Provider id: `codex`.
+- Example model string: `codex:gpt-5.5`.
+- Transport: dedicated `codex-responses`, not OpenAI-compatible.
+- Auth envs: `GBRAIN_CODEX_ACCESS_TOKEN` preferred, `CODEX_ACCESS_TOKEN`
+  fallback, `GBRAIN_CODEX_BASE_URL` optional.
+- Codex is for chat, text query expansion, and subagent tool loops. It is not
+  an embedding or reranker provider.
+- Codex must never use `OPENAI_API_KEY`; keep that key embeddings-only when
+  `embedding_model` remains OpenAI-backed.
+
+Safe routing recipe when you want Codex for non-embedding LLM work while keeping
+OpenAI embeddings:
+
+```bash
+gbrain config set models.chat codex:gpt-5.5
+gbrain config set models.expansion codex:gpt-5.5
+# Leave embedding_model pointed at OpenAI, e.g. openai:text-embedding-3-large.
+```
+
+Secret hygiene: never paste token values into docs, shell history examples,
+logs, issue reports, or screenshots. Use placeholders such as
+`<codex-access-token>` or `[REDACTED]` in written examples. Explicit env tokens
+can expire; refresh/auth-store reuse is future/opt-in behavior, not automatic.
+
+Capability caveats: Codex is approved for tool-loop/subagent routing after
+replay tests, but GBrain does not currently implement Codex prompt-cache support
+(`supports_prompt_cache:false`). Model routing may warn about degraded prompt
+caching or cost semantics. `models.expansion = codex:gpt-5.5` is for text query
+expansion only; image OCR still needs a multimodal expansion model/provider and
+skips Codex rather than treating it as OCR-capable.
 
 ## How search works across engines
 

@@ -8,6 +8,41 @@ The orienting idea: **GBrain itself is rounding error; the spend that matters is
 downstream embedding.** These gates exist so a routine sync or enrich can't run up
 an unexpected embedding bill, while never wedging an unattended cron.
 
+## Keeping OpenAI API balance embeddings-only with Codex
+
+These spend gates govern embedding spend. Chat, text query expansion, and
+subagent loops are controlled by model routing. To route non-embedding LLM work
+through Codex while keeping an OpenAI API key for embeddings only:
+
+```bash
+gbrain config set models.chat codex:gpt-5.5
+gbrain config set models.expansion codex:gpt-5.5
+# Leave embedding_model pointed at OpenAI, e.g. openai:text-embedding-3-large.
+```
+
+Codex provider details:
+
+- Provider id: `codex`; example model: `codex:gpt-5.5`.
+- Transport: dedicated `codex-responses`, not OpenAI-compatible.
+- Auth envs: `GBRAIN_CODEX_ACCESS_TOKEN` preferred, `CODEX_ACCESS_TOKEN`
+  fallback, `GBRAIN_CODEX_BASE_URL` optional.
+- Codex is for chat, text query expansion, and replay-tested subagent tool
+  loops. It is not an embedding or reranker provider.
+- Codex must never use `OPENAI_API_KEY`; when `embedding_model` is
+  `openai:text-embedding-3-large`, that OpenAI key remains embeddings-only.
+
+Secret hygiene: never paste token values into docs, shell history examples,
+logs, issue reports, or screenshots. Use placeholders such as
+`<codex-access-token>` or `[REDACTED]`. Explicit env access tokens can expire;
+refresh/auth-store reuse is future/opt-in behavior, not automatic.
+
+Cost/accounting caveat: Codex is approved for tool-loop/subagent use after
+replay tests, but GBrain currently has no Codex prompt-cache implementation
+(`supports_prompt_cache:false`) and subscription-backed Codex usage does not map
+cleanly to OpenAI API token pricing. Model routing may warn about degraded prompt
+caching or cost semantics. Text query expansion can use Codex; image OCR still
+needs a multimodal expansion model/provider and safely skips Codex.
+
 ## `spend.posture` — one switch for "cost is not my constraint"
 
 ```bash

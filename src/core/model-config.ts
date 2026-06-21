@@ -39,9 +39,9 @@ export interface ResolveModelOpts {
    * before the env var. Routing groups: `utility` (haiku-class, classification
    * + expansion + verdict), `reasoning` (sonnet-class, default chat +
    * synthesis + fact extraction), `deep` (opus-class, expensive reasoning),
-   * `subagent` (Anthropic-only multi-turn tool loop — never inherits a
-   * non-Anthropic `models.default`; falls back to TIER_DEFAULTS.subagent
-   * with a one-shot stderr warn instead).
+   * `subagent` (multi-turn tool loop — only recipes with
+   * `chat.supports_subagent_loop === true`; unsafe chat/tool-only models fall
+   * back to TIER_DEFAULTS.subagent with a one-shot stderr warn instead).
    */
   tier?: ModelTier;
   /** Hardcoded last-resort fallback. */
@@ -65,9 +65,9 @@ export const DEFAULT_ALIASES: Record<string, string> = {
 /**
  * Default model for each tier. Used as the hardcoded fallback when no
  * `models.tier.<tier>` config + no `models.default` is set. Subagent gets
- * Sonnet (Anthropic Messages API tool-loop shape required); reasoning gets
- * Sonnet (default workhorse); deep gets Opus 4.7 (expensive reasoning);
- * utility gets Haiku (fast classification).
+ * Sonnet (known-good tool-loop replay/safety baseline); reasoning gets Sonnet
+ * (default workhorse); deep gets Opus 4.7 (expensive reasoning); utility gets
+ * Haiku (fast classification).
  *
  * Users override via `gbrain config set models.tier.<tier> <model>`.
  */
@@ -201,16 +201,6 @@ export async function resolveModel(
 }
 
 /**
- * v0.31.12 subagent runtime enforcement (layer 2): if `tier === 'subagent'`
- * resolved to a non-Anthropic model, warn once per (source, model) and fall
- * back to `TIER_DEFAULTS.subagent`. Source is the resolution-chain step that
- * produced the bad value (`models.default`, `models.tier.subagent`, etc.) so
- * the user sees where to fix it.
- *
- * Returns the resolved value unchanged for non-subagent tiers or when the
- * resolved value is already Anthropic.
- */
-/**
  * v0.38 (D7) — replaces the legacy `enforceSubagentAnthropic` with a
  * capability-based gate. The check now asks "can this model run a subagent
  * tool loop?" via the recipe-driven capability classifier instead of "is
@@ -218,6 +208,8 @@ export async function resolveModel(
  *
  *   - `unusable:no_tools` → fall back to TIER_DEFAULTS.subagent + warn (the
  *     loop literally cannot dispatch tools, so the resolved model is wrong)
+ *   - `unusable:no_subagent_loop` → fall back to TIER_DEFAULTS.subagent + warn
+ *     (chat/tool calling exists, but replay/safety approval is not present)
  *   - `unknown` → fall back to TIER_DEFAULTS.subagent + warn (unknown provider
  *     — defensive: don't burn money on a model we can't verify supports tools)
  *   - `degraded:no_caching` → return resolved; warn once per (source, model)
@@ -235,7 +227,7 @@ function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, s
   // (capabilities → model-resolver → recipes; this would create a cycle if
   // model-config itself were imported by recipes, which it isn't, but
   // defensive against future drift).
-  let verdict: 'ok' | 'degraded:no_caching' | 'degraded:no_parallel' | 'unusable:no_tools' | 'unknown';
+  let verdict: import('./ai/capabilities.ts').CapabilityVerdict;
   try {
     // Synchronous-style import via require shim isn't available in ESM; the
     // helper is pure, so a synchronous static import is fine here. Pulling
@@ -251,12 +243,14 @@ function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, s
   }
 
   const key = `${source}:${resolved}`;
-  if (verdict === 'unusable:no_tools' || verdict === 'unknown') {
+  if (verdict === 'unusable:no_tools' || verdict === 'unusable:no_subagent_loop' || verdict === 'unknown') {
     if (!_subagentTierWarningsEmitted.has(key)) {
       _subagentTierWarningsEmitted.add(key);
       const reason = verdict === 'unusable:no_tools'
         ? `lacks tool-calling support`
-        : `is an unrecognized provider`;
+        : verdict === 'unusable:no_subagent_loop'
+          ? `is not marked supports_subagent_loop=true (tool-loop replay/safety not approved)`
+          : `is an unrecognized provider`;
       process.stderr.write(
         `[models] tier.subagent resolved to "${resolved}" via "${source}", which ${reason}. ` +
         `The subagent tool loop cannot run on this model — falling back to ${TIER_DEFAULTS.subagent}. ` +
@@ -281,9 +275,9 @@ function enforceSubagentCapable(resolved: string, tier: ModelTier | undefined, s
 }
 
 /**
- * @deprecated v0.38 — renamed to `enforceSubagentCapable`. The old name and
- * Anthropic-only semantics are preserved as a thin wrapper for any external
- * callers (extensions, plugins) that imported it. New code MUST call
+ * @deprecated v0.38 — renamed to `enforceSubagentCapable`. The old name is
+ * preserved as a thin wrapper for external callers (extensions, plugins) that
+ * imported it; semantics are now recipe/capability-based. New code MUST call
  * `enforceSubagentCapable` instead.
  */
 function enforceSubagentAnthropic(resolved: string, tier: ModelTier | undefined, source: string): string {

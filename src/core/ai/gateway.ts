@@ -46,12 +46,14 @@ import type {
   TouchpointKind,
 } from './types.ts';
 import { resolveRecipe, assertTouchpoint, parseModelId } from './model-resolver.ts';
+import { classifyCapabilities } from './capabilities.ts';
 import { resolveModel, TIER_DEFAULTS } from '../model-config.ts';
 import type { BrainEngine } from '../engine.ts';
 import { dimsProviderOptions } from './dims.ts';
 import { hasAnthropicKey } from './anthropic-key.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
 import { runGuardrails, hasGuardrails, type GuardrailHook } from '../guardrails.ts';
+import { codexChat, redactCodexSecrets } from './codex-responses.ts';
 
 // ---- Gateway-wide AI-HTTP timeout (v0.42.20.0, #1762/#1775) ----
 //
@@ -786,6 +788,27 @@ export function isAvailable(touchpoint: TouchpointKind, modelOverride?: string):
     const touchpointConfig = recipe.touchpoints[touchpoint as 'expansion' | 'chat' | 'reranker'];
     if (!touchpointConfig) return false;
 
+    // Codex declares GBRAIN_CODEX_ACCESS_TOKEN as the preferred env var but
+    // resolveAuth also accepts CODEX_ACCESS_TOKEN as an explicit fallback.
+    // The generic required-env check below only sees the preferred name, so
+    // route Codex availability through its resolver instead of accidentally
+    // rejecting the documented fallback. Keep this narrow: Codex must never be
+    // inferred available from OPENAI_API_KEY.
+    if (recipe.implementation === 'codex-responses') {
+      try {
+        const resolved = recipe.resolveAuth
+          ? recipe.resolveAuth(_config!.env)
+          : defaultResolveAuth(
+            recipe,
+            _config!.env,
+            touchpoint as 'expansion' | 'chat' | 'reranker',
+          );
+        return !!resolved.token;
+      } catch {
+        return false;
+      }
+    }
+
     // For openai-compatible without auth requirements (Ollama local), treat as always-available.
     const required = recipe.auth_env?.required ?? [];
     if (required.length === 0) return true;
@@ -1220,6 +1243,11 @@ function instantiateEmbedding(recipe: Recipe, modelId: string, cfg: AIGatewayCon
     case 'native-anthropic':
       throw new AIConfigError(
         `Anthropic has no embedding model. Use openai or google for embeddings.`,
+      );
+    case 'codex-responses':
+      throw new AIConfigError(
+        `Codex has no embedding model. Use OpenAI or another embedding provider for embeddings.`,
+        `Configure embedding_model to a provider with an embedding touchpoint; Codex chat will use its dedicated transport once wired.`,
       );
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
@@ -2109,6 +2137,10 @@ async function resolveExpansionProvider(modelStr: string): Promise<{ model: any;
   assertTouchpoint(recipe, 'expansion', parsed.modelId, getExtendedModelsForProvider(parsed.providerId));
   const cfg = requireConfig();
 
+  if (recipe.implementation === 'codex-responses') {
+    return { model: null, recipe, modelId: parsed.modelId };
+  }
+
   const cacheKey = `exp:${recipe.id}:${parsed.modelId}:${cfg.base_urls?.[recipe.id] ?? ''}`;
   const cached = _modelCache.get(cacheKey);
   if (cached) return { model: cached, recipe, modelId: parsed.modelId };
@@ -2135,6 +2167,11 @@ function instantiateExpansion(recipe: Recipe, modelId: string, cfg: AIGatewayCon
       if (!apiKey) throw new AIConfigError(`Anthropic expansion requires ANTHROPIC_API_KEY.`, recipe.setup_hint);
       return createAnthropic({ apiKey }).languageModel(modelId);
     }
+    case 'codex-responses':
+      throw new AIConfigError(
+        `Codex expansion uses the dedicated Responses transport and should not instantiate an AI SDK model.`,
+        `This is a gbrain bug — gateway.expand should branch before instantiateExpansion for codex-responses recipes.`,
+      );
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'expansion');
@@ -2154,6 +2191,115 @@ const ExpansionSchema = z.object({
   queries: z.array(z.string()).min(1).max(5),
 });
 
+function dedupeExpansionQueries(query: string, expansions: string[]): string[] {
+  const seen = new Set<string>();
+  return [query, ...expansions].filter(q => {
+    const k = q.toLowerCase().trim();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return !!q.trim();
+  });
+}
+
+function codexExpansionPrompt(query: string): string {
+  return [
+    'Rewrite the search query below into 3-4 different, related queries that would help find relevant documents.',
+    'Return ONLY the JSON object with a "queries" array of strings. Do NOT include markdown, commentary, or code fences.',
+    'Do NOT include the original query in the result.',
+    'Each rewrite should emphasize different aspects, synonyms, or framings.',
+    '',
+    `Query: ${query}`,
+  ].join('\n');
+}
+
+function codexConfigSecrets(cfg: AIGatewayConfig): Array<string | null | undefined> {
+  return [
+    cfg.env.GBRAIN_CODEX_ACCESS_TOKEN,
+    cfg.env.CODEX_ACCESS_TOKEN,
+    cfg.env.OPENAI_API_KEY,
+  ];
+}
+
+function resolveCodexBaseURL(
+  recipe: Recipe,
+  cfg: AIGatewayConfig,
+  touchpoint: 'expansion' | 'chat',
+): string {
+  const rawBaseURL = cfg.base_urls?.[recipe.id]
+    ?? cfg.env.GBRAIN_CODEX_BASE_URL
+    ?? recipe.base_url_default;
+  const baseURL = rawBaseURL?.replace(/\/+$/, '') ?? '';
+  if (!baseURL) {
+    throw new AIConfigError(
+      `${recipe.name} requires a base URL for Codex ${touchpoint}.`,
+      recipe.setup_hint,
+    );
+  }
+  return baseURL;
+}
+
+function resolveCodexAccessToken(
+  recipe: Recipe,
+  cfg: AIGatewayConfig,
+  touchpoint: 'expansion' | 'chat',
+): string {
+  const auth = applyResolveAuth(recipe, cfg, touchpoint);
+  const apiKey = auth.apiKey;
+  if (!apiKey) {
+    throw new AIConfigError(
+      `Codex ${touchpoint} did not resolve a bearer token from GBRAIN_CODEX_ACCESS_TOKEN or CODEX_ACCESS_TOKEN.`,
+      recipe.setup_hint,
+    );
+  }
+  return apiKey;
+}
+
+function warnCodexExpansionUnavailable(modelStr: string): void {
+  const cfg = _config;
+  if (!cfg) return;
+  try {
+    const { recipe } = resolveRecipe(modelStr);
+    if (recipe.implementation !== 'codex-responses' || !recipe.touchpoints.expansion) return;
+    resolveCodexAccessToken(recipe, cfg, 'expansion');
+  } catch (err) {
+    if (!(err instanceof AIConfigError)) return;
+    const fix = err.fix ? ` ${err.fix}` : '';
+    const message = redactCodexSecrets(`${err.message}${fix}`, codexConfigSecrets(cfg));
+    console.warn(`[ai.gateway] expansion disabled: ${message}`);
+  }
+}
+
+async function expandWithCodexResponses(
+  query: string,
+  recipe: Recipe,
+  modelId: string,
+): Promise<string[]> {
+  const cfg = requireConfig();
+  const accessToken = resolveCodexAccessToken(recipe, cfg, 'expansion');
+  const baseURL = resolveCodexBaseURL(recipe, cfg, 'expansion');
+
+  const result = await codexChat({
+    cfg: {
+      baseURL,
+      accessToken,
+      model: modelId,
+      signal: withDefaultTimeout(undefined, AI_CHAT_TIMEOUT_MS),
+    },
+    messages: [{ role: 'user', content: codexExpansionPrompt(query) }],
+  });
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.text) as unknown;
+  } catch {
+    return [query];
+  }
+
+  const schemaResult = ExpansionSchema.safeParse(parsed);
+  if (!schemaResult.success) return [query];
+  return dedupeExpansionQueries(query, schemaResult.data.queries);
+}
+
 /**
  * Expand a search query into up to 4 related queries.
  * Returns the original query PLUS expansions. On failure, returns just the original.
@@ -2161,7 +2307,12 @@ const ExpansionSchema = z.object({
  */
 export async function expand(query: string): Promise<string[]> {
   if (!query || !query.trim()) return [query];
-  if (!isAvailable('expansion')) return [query];
+  if (!isAvailable('expansion')) {
+    const expansionModel = _config?.expansion_model ?? DEFAULT_EXPANSION_MODEL;
+    warnCodexExpansionUnavailable(expansionModel);
+    return [query];
+  }
+  const expansionModel = getExpansionModel();
 
   // Guardrail seam: classify the query before the expansion model call.
   await classifyGatewayGuardrail({
@@ -2171,7 +2322,11 @@ export async function expand(query: string): Promise<string[]> {
   });
 
   try {
-    const { model, recipe, modelId } = await resolveExpansionProvider(getExpansionModel());
+    const { model, recipe, modelId } = await resolveExpansionProvider(expansionModel);
+    if (recipe.implementation === 'codex-responses') {
+      return await expandWithCodexResponses(query, recipe, modelId);
+    }
+
     const result = await generateObject({
       model,
       schema: ExpansionSchema,
@@ -2188,15 +2343,7 @@ export async function expand(query: string): Promise<string[]> {
     });
 
     const expansions = result.object?.queries ?? [];
-    // Deduplicate + include the original query
-    const seen = new Set<string>();
-    const all = [query, ...expansions].filter(q => {
-      const k = q.toLowerCase().trim();
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return !!q.trim();
-    });
-    return all;
+    return dedupeExpansionQueries(query, expansions);
   } catch (err) {
     // Expansion is best-effort: on failure, fall back to the original query alone.
     const normalized = normalizeAIError(err, 'expand');
@@ -2224,7 +2371,14 @@ export async function expand(query: string): Promise<string[]> {
  */
 export async function generateOcrText(imageBytes: Buffer, mime: string): Promise<string> {
   if (!isAvailable('expansion')) return '';
-  const { model } = await resolveExpansionProvider(getExpansionModel());
+  const { model, recipe, modelId } = await resolveExpansionProvider(getExpansionModel());
+  if (recipe.implementation === 'codex-responses') {
+    console.warn(
+      `[ai.gateway] OCR disabled: ${recipe.id}:${modelId} uses Codex Responses, ` +
+      `which supports query expansion/chat only and cannot process image OCR.`,
+    );
+    return '';
+  }
   const base64 = imageBytes.toString('base64');
   const result = await generateText({
     model,
@@ -2481,6 +2635,10 @@ async function resolveChatProvider(modelStr: string): Promise<{ model: any; reci
   assertTouchpoint(recipe, 'chat', parsed.modelId, getExtendedModelsForProvider(parsed.providerId));
   const cfg = requireConfig();
 
+  if (recipe.implementation === 'codex-responses') {
+    return { model: null, recipe, modelId: parsed.modelId };
+  }
+
   const cacheKey = `chat:${recipe.id}:${parsed.modelId}:${cfg.base_urls?.[recipe.id] ?? ''}`;
   const cached = _modelCache.get(cacheKey);
   if (cached) return { model: cached, recipe, modelId: parsed.modelId };
@@ -2507,6 +2665,11 @@ function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig):
       if (!apiKey) throw new AIConfigError(`Anthropic chat requires ANTHROPIC_API_KEY.`, recipe.setup_hint);
       return createAnthropic({ apiKey }).languageModel(modelId);
     }
+    case 'codex-responses':
+      throw new AIConfigError(
+        `Codex chat requires dedicated transport wiring from a later task.`,
+        `Do not route Codex through the Vercel AI SDK/OpenAI-compatible path; use another chat provider until Codex transport is implemented.`,
+      );
     case 'openai-compatible': {
       // D12=A: unified auth via Recipe.resolveAuth (or default).
       const auth = applyResolveAuth(recipe, cfg, 'chat');
@@ -2751,6 +2914,54 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     }
   };
 
+  if (recipe.implementation === 'codex-responses') {
+    try {
+      const cfg = requireConfig();
+      const auth = applyResolveAuth(recipe, cfg, 'chat');
+      const apiKey = auth.apiKey;
+      if (!apiKey) {
+        throw new AIConfigError(
+          'Codex chat did not resolve a bearer token from GBRAIN_CODEX_ACCESS_TOKEN or CODEX_ACCESS_TOKEN.',
+          recipe.setup_hint,
+        );
+      }
+
+      const rawBaseURL = cfg.base_urls?.[recipe.id]
+        ?? cfg.env.GBRAIN_CODEX_BASE_URL
+        ?? recipe.base_url_default;
+      const baseURL = rawBaseURL?.replace(/\/+$/, '') ?? '';
+      if (!baseURL) {
+        throw new AIConfigError(
+          `${recipe.name} requires a base URL for Codex chat.`,
+          recipe.setup_hint,
+        );
+      }
+
+      const result = await codexChat({
+        cfg: {
+          baseURL,
+          accessToken: apiKey,
+          model: modelId,
+          maxOutputTokens,
+          signal: withDefaultTimeout(opts.abortSignal, AI_CHAT_TIMEOUT_MS),
+        },
+        system: opts.system,
+        messages: opts.messages,
+        tools: opts.tools,
+      });
+
+      _recordBudget(`${recipe.id}:${modelId}`, result.usage.input_tokens, result.usage.output_tokens);
+      return result;
+    } catch (err) {
+      const fallback = _extractUsageFromError(err, {
+        inputTokens: estimatedInputTokens,
+        outputTokens: maxOutputTokens,
+      });
+      _recordBudget(`${recipe.id}:${modelId}`, fallback.inputTokens, fallback.outputTokens);
+      throw normalizeAIError(err, `chat(${recipe.id}:${modelId})`);
+    }
+  }
+
   try {
     const result = await generateText({
       model,
@@ -2943,6 +3154,26 @@ export interface ToolLoopResult {
 export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
   const maxTurns = opts.maxTurns ?? 20;
   const maxTokens = opts.maxTokens ?? 4096;
+  const loopModel = opts.model ?? getChatModel();
+  const capabilityVerdict = classifyCapabilities(loopModel);
+  if (capabilityVerdict === 'unusable:no_tools') {
+    throw new AIConfigError(
+      `toolLoop rejected model "${loopModel}" because it lacks native tool calling.`,
+      'Use a chat model with tool support for autonomous tool loops.',
+    );
+  }
+  if (capabilityVerdict === 'unusable:no_subagent_loop') {
+    throw new AIConfigError(
+      `toolLoop rejected model "${loopModel}" because supports_subagent_loop is not true.`,
+      'Normal gateway.chat remains available for this model, but autonomous loops require a recipe that has passed gbrain replay/safety coverage.',
+    );
+  }
+  if (capabilityVerdict === 'unknown') {
+    throw new AIConfigError(
+      `toolLoop rejected model "${loopModel}" because its provider is unknown or has no chat touchpoint.`,
+      'Use format provider:model with a recipe-declared chat provider.',
+    );
+  }
   const handlers = opts.toolHandlers;
   const totalUsage: ChatResult['usage'] = {
     input_tokens: 0,

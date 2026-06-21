@@ -11,7 +11,9 @@
  *
  * This module reads capabilities from the recipe (`src/core/ai/recipes/*.ts`)
  * and surfaces them via a normalized `ProviderCapabilities` shape that the
- * gateway's `toolLoop()` consumes to decide:
+ * subagent/autonomous loop gates consume to decide:
+ *   - REFUSE when the recipe has not opted into `supports_subagent_loop`
+ *     (tool calling is necessary but not sufficient for crash-replay safety)
  *   - REFUSE at submit when tool-calling is unsupported (D6 — useless loop)
  *   - WARN at submit when prompt caching is unavailable (D6 — cost regression)
  *   - INFO at submit when parallel tools unsupported (D6 — just slower)
@@ -25,8 +27,16 @@ import { resolveRecipe } from './model-resolver.ts';
 import { AIConfigError } from './errors.ts';
 
 export interface ProviderCapabilities {
-  /** Provider returns native function/tool calling. Required for the subagent loop. */
+  /** Provider returns native function/tool calling. Required, but not sufficient, for the subagent loop. */
   supportsToolCalling: boolean;
+
+  /**
+   * Provider/model is approved for gbrain's autonomous subagent loop, including
+   * crash-replay and tool-result safety. Strictly stronger than tool calling:
+   * a provider may support gateway.chat tools while still returning false here
+   * until its replay/safety test matrix passes.
+   */
+  supportsSubagentLoop: boolean;
 
   /**
    * Anthropic-style ephemeral prompt cache markers honored. When false, the
@@ -90,6 +100,7 @@ export function getProviderCapabilities(modelString: string): ProviderCapabiliti
 
   return {
     supportsToolCalling: chat.supports_tools === true,
+    supportsSubagentLoop: chat.supports_subagent_loop === true,
     supportsPromptCaching: chat.supports_prompt_cache === true,
     // No recipe exposes parallel-tools-specifically yet; gate on supports_tools.
     // Subsequent waves can split this into its own recipe field if a provider
@@ -112,15 +123,18 @@ export function getProviderCapabilities(modelString: string): ProviderCapabiliti
  * Tier-1 gate consumed by `enforceSubagentCapable()` in src/core/model-config.ts
  * (D6 + D7). Returns:
  *
- *   - `'ok'` — provider has tool-calling, prompt caching, and parallel tools.
- *     Loop runs at full speed.
- *   - `'degraded:no_caching'` — provider supports tools but lacks prompt
+ *   - `'ok'` — provider has tool-calling, subagent-loop approval, prompt
+ *     caching, and parallel tools. Loop runs at full speed.
+ *   - `'degraded:no_caching'` — provider supports the subagent loop but lacks prompt
  *     caching. Loop runs but per-turn cost is higher. Warn once per
  *     (source, model) pair.
  *   - `'degraded:no_parallel'` — provider supports tools and caching but the
  *     loop will dispatch serially. Info-log; no warn.
  *   - `'unusable:no_tools'` — provider lacks tool calling entirely. Refuse at
  *     submit; the loop has no way to execute brain ops.
+ *   - `'unusable:no_subagent_loop'` — provider has chat/tools but is not yet
+ *     approved for gbrain's autonomous loop (`supports_subagent_loop !== true`).
+ *     Normal `gateway.chat()` remains allowed; subagent/autonomous loops refuse.
  *   - `'unknown'` — the provider/model isn't in any recipe. Refuse at submit
  *     (defensive: don't spend money on an unrecognized provider).
  *
@@ -132,6 +146,7 @@ export type CapabilityVerdict =
   | 'degraded:no_caching'
   | 'degraded:no_parallel'
   | 'unusable:no_tools'
+  | 'unusable:no_subagent_loop'
   | 'unknown';
 
 export function classifyCapabilities(modelString: string): CapabilityVerdict {
@@ -142,6 +157,7 @@ export function classifyCapabilities(modelString: string): CapabilityVerdict {
     return 'unknown';
   }
   if (!caps.supportsToolCalling) return 'unusable:no_tools';
+  if (!caps.supportsSubagentLoop) return 'unusable:no_subagent_loop';
   if (!caps.supportsPromptCaching) return 'degraded:no_caching';
   if (!caps.supportsParallelTools) return 'degraded:no_parallel';
   return 'ok';
