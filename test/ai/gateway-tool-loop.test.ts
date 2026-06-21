@@ -45,6 +45,17 @@ describe('gateway.toolLoop (v0.38 D11 — provider-agnostic loop control)', () =
     expect(result.totalUsage.input_tokens).toBe(5);
   });
 
+  it('refuses OpenRouter for autonomous toolLoop while leaving gateway.chat support separate', async () => {
+    await expect(
+      toolLoop({
+        model: 'openrouter:openai/gpt-5.2',
+        initialMessages: [{ role: 'user', content: 'try autonomous loop' }],
+        tools: [],
+        toolHandlers: new Map(),
+      }),
+    ).rejects.toThrow(/supports_subagent_loop|autonomous loops/i);
+  });
+
   it('dispatches a single tool call and feeds the result back to the next turn', async () => {
     let turn = 0;
     __setChatTransportForTests(async () => {

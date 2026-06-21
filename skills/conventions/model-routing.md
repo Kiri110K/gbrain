@@ -5,7 +5,7 @@ moments.
 
 ## 1. gbrain's internal tier system (v0.31.12+)
 
-This is how gbrain itself picks which Claude/OpenAI/Google model runs each
+This is how gbrain itself picks which Claude/OpenAI/Google/Codex model runs each
 internal task (chat, expansion, synthesis, classification, etc.).
 
 Four tiers:
@@ -15,7 +15,7 @@ Four tiers:
 | `utility` | fast classification, expansion, verdict, dedup | `claude-haiku-4-5-20251001` | query expansion, facts contradiction classifier, dream synthesize verdict |
 | `reasoning` | default chat, synthesis, generation | `claude-sonnet-4-6` | gateway chat, dream synthesize, patterns, facts extraction |
 | `deep` | slow, expensive reasoning | `claude-opus-4-7` | `gbrain think`, auto-think, cross-modal eval slot B |
-| `subagent` | Anthropic-only multi-turn tool loop | `claude-sonnet-4-6` | `gbrain agent run` |
+| `subagent` | capability-gated multi-turn tool loop | `claude-sonnet-4-6` | `gbrain agent run`; Codex allowed after replay tests |
 
 Override priority (highest first):
 
@@ -41,7 +41,32 @@ gbrain config set models.tier.deep opus
 # Custom alias, then use it everywhere
 gbrain config set models.aliases.frontier anthropic:claude-opus-4-7
 gbrain config set models.default frontier
+
+# Route non-embedding LLM work through Codex, while OpenAI remains embeddings-only
+gbrain config set models.chat codex:gpt-5.5
+gbrain config set models.expansion codex:gpt-5.5
+# Leave embedding_model pointed at OpenAI, e.g. openai:text-embedding-3-large.
 ```
+
+### Codex safe routing
+
+- Provider id: `codex`; example model: `codex:gpt-5.5`.
+- Auth envs: `GBRAIN_CODEX_ACCESS_TOKEN` preferred, `CODEX_ACCESS_TOKEN`
+  fallback, `GBRAIN_CODEX_BASE_URL` optional.
+- Codex uses the dedicated `codex-responses` transport; it is not
+  OpenAI-compatible and must never use `OPENAI_API_KEY`.
+- Use Codex for chat, text query expansion, and replay-tested subagent tool
+  loops. Do not configure Codex for embeddings or rerankers.
+- Never paste token values into docs, shell history examples, logs, issue
+  reports, or screenshots. Use placeholders such as `<codex-access-token>` or
+  `[REDACTED]`.
+- Explicit env access tokens may expire. Refresh/auth-store reuse is
+  future/opt-in behavior, not automatic.
+- Codex currently has `supports_prompt_cache:false`. Even though replay tests
+  approve it for tool-loop/subagent routing, model routing may warn about
+  degraded prompt-caching/cost semantics.
+- `models.expansion = codex:gpt-5.5` is for text query expansion only. Image
+  OCR still needs a multimodal expansion model/provider and safely skips Codex.
 
 Visibility:
 
@@ -50,12 +75,14 @@ gbrain models                    # print current routing table
 gbrain models doctor             # 1-token probe to each configured model
 ```
 
-**Subagent tier exists because the loop is Anthropic-only.** The handler
-uses Messages API + prompt caching on system + tools. Setting
-`models.default = openai:gpt-5.5` silently breaks the loop, so we isolate
-`tier.subagent`. Three enforcement layers: submit-time guard in
-`MinionQueue.add`, tier-resolution fallback in `resolveModel`, doctor
-`subagent_provider` check.
+**Subagent tier exists because the loop is provider-capability-gated.** The
+handler needs multi-turn tool calls that replay cleanly. Anthropic remains the
+default and uses prompt caching on system + tools. Codex (`codex:gpt-5.5`) is
+also approved for tool-loop/subagent routing after replay tests, but currently
+has `supports_prompt_cache:false`, so cost/prompt-cache warnings are expected.
+Providers without `supports_subagent_loop` are refused or rerouted by the same
+enforcement layers: submit-time guard in `MinionQueue.add`, tier-resolution
+fallback in `resolveModel`, doctor `subagent_provider` check.
 
 When adding a new LLM call, route through `resolveModel()` with a tier —
 never hardcode a model string. The v0.31.6 chat default

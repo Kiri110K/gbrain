@@ -161,14 +161,62 @@ gbrain stats
 **If zero or very low:** `OPENAI_API_KEY` may be missing or invalid. Check:
 
 ```bash
-echo $OPENAI_API_KEY | head -c 10
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+  printf 'OPENAI_API_KEY is set (value hidden)\n'
+else
+  printf 'OPENAI_API_KEY is not set\n'
+fi
 ```
 
-If blank, set the key. Then:
+If blank, set the key through your normal secret manager or shell environment
+without printing the value. Then:
 
 ```bash
 gbrain embed --stale
 ```
+
+### 5b. Optional: Codex for chat/expansion, OpenAI for embeddings
+
+Use this check when you want Codex-backed non-embedding LLM work without spending
+the OpenAI API key on chat. Codex provider id is `codex`; a typical model is
+`codex:gpt-5.5`. Codex uses the dedicated `codex-responses` transport and must
+not use `OPENAI_API_KEY`.
+
+**Safe config:**
+
+```bash
+gbrain config set models.chat codex:gpt-5.5
+gbrain config set models.expansion codex:gpt-5.5
+# Leave embedding_model pointed at OpenAI, e.g. openai:text-embedding-3-large.
+```
+
+**Auth envs:** set `GBRAIN_CODEX_ACCESS_TOKEN` (preferred) or
+`CODEX_ACCESS_TOKEN` (fallback). `GBRAIN_CODEX_BASE_URL` is optional. Do not
+paste token values into docs, shell history examples, logs, issue reports, or
+screenshots; use placeholders such as `<codex-access-token>` or `[REDACTED]` in
+examples.
+
+**Verify routing, without revealing secrets:**
+
+```bash
+gbrain config get models.chat
+gbrain config get models.expansion
+gbrain config get embedding_model
+gbrain models doctor
+```
+
+**Expected:** `models.chat` and `models.expansion` resolve to
+`codex:gpt-5.5`; `embedding_model` remains OpenAI-backed if you still want
+OpenAI embeddings. A missing Codex token should report
+`GBRAIN_CODEX_ACCESS_TOKEN` / `CODEX_ACCESS_TOKEN`, not `OPENAI_API_KEY`.
+
+**Caveats:** explicit env access tokens may expire; refresh/auth-store reuse is
+future/opt-in behavior, not automatic. Codex is supported for chat, text query
+expansion, and replay-tested subagent tool loops, but not embeddings or
+rerankers. It currently lacks GBrain prompt-cache support, so model routing may
+warn about degraded prompt-caching/cost semantics. Codex expansion is text-only;
+image OCR still needs a multimodal expansion model/provider and safely skips
+Codex.
 
 ---
 

@@ -45,9 +45,33 @@ function configureFromEnv(): void {
 }
 
 export function envReady(recipe: Recipe, env: NodeJS.ProcessEnv = process.env): boolean {
+  if (recipe.resolveAuth) {
+    try {
+      const auth = recipe.resolveAuth(env);
+      if (!auth.headerName || !auth.token) return false;
+      // Some openai-compatible recipes also require env-templated endpoint
+      // config (for example Azure's endpoint/deployment). Resolve it here so
+      // provider list/picker readiness matches gateway configuration without
+      // making a network request.
+      if (recipe.resolveOpenAICompatConfig) recipe.resolveOpenAICompatConfig(env);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   const required = recipe.auth_env?.required ?? [];
   if (required.length === 0) return true; // e.g. local Ollama
   return required.every(k => !!env[k]);
+}
+
+function missingAuthSummary(recipe: Recipe): string {
+  if (recipe.id === 'codex') {
+    return 'GBRAIN_CODEX_ACCESS_TOKEN (preferred) or CODEX_ACCESS_TOKEN (fallback)';
+  }
+  const required = recipe.auth_env?.required ?? [];
+  if (required.length === 0) return 'setup';
+  return required.join(', ');
 }
 
 /**
@@ -75,7 +99,7 @@ export function formatRecipeTable(recipes: Recipe[], env: NodeJS.ProcessEnv = pr
     const hasExpand = !!r.touchpoints.expansion;
     const hasChat = !!r.touchpoints.chat && r.touchpoints.chat.models.length > 0;
     const ready = envReady(r, env);
-    const status = ready ? '✓ ready' : `✗ missing ${r.auth_env?.required?.[0] ?? 'setup'}`;
+    const status = ready ? '✓ ready' : `✗ missing ${missingAuthSummary(r)}`;
     rows.push(
       r.id.padEnd(idCol) +
       r.tier.padEnd(18) +

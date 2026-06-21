@@ -30,12 +30,10 @@ import type { Recipe } from '../types.ts';
  * downstream agent stacks (OpenClaw deployments, etc.) get their own
  * attribution on OR's leaderboard instead of polluting gbrain's.
  *
- * Subagent loops: `supports_subagent_loop: false` is INFORMATIONAL. The real
- * gate is `isAnthropicProvider()` in `src/core/model-config.ts` which
- * hard-pins gbrain's subagent infra to Anthropic-direct (stable tool_use_id
- * across crashes/replays). OR-proxied Anthropic is rejected at submit time
- * regardless of this flag — relaxing the gate is a deeper architectural
- * change tracked in TODOS.md.
+ * Subagent loops: `supports_subagent_loop: false` is a real autonomous-loop
+ * gate. OpenRouter chat/tool calls can still flow through `gateway.chat()`, but
+ * gbrain subagents reject OR until replay + safety coverage is explicitly
+ * approved and this recipe flips the flag.
  */
 export const openrouter: Recipe = {
   id: 'openrouter',
@@ -91,7 +89,7 @@ export const openrouter: Recipe = {
         'deepseek/deepseek-chat',
       ],
       supports_tools: true,
-      // Informational only — real gate is isAnthropicProvider() upstream.
+      // Not approved for gbrain subagent/autonomous loops yet.
       supports_subagent_loop: false,
       supports_prompt_cache: false,
       // No max_context_tokens: catalog spans 128K to 1M+; a single recipe-wide

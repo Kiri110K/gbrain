@@ -2713,6 +2713,16 @@ export async function checkSubagentCapability(engine: BrainEngine): Promise<Chec
             `Fix: \`gbrain config set ${source} <provider>:<model-with-tools>\` (e.g. anthropic:claude-sonnet-4-6 or openai:gpt-5.2).`,
         };
       }
+      if (verdict === 'unusable:no_subagent_loop') {
+        return {
+          name: 'subagent_capability',
+          status: 'warn',
+          message:
+            `${source} is "${resolved}" and may support chat/tool calls, but its recipe does not declare supports_subagent_loop=true. ` +
+            `Subagent/autonomous loops require replay/safety approval; runtime will fall back to claude-sonnet-4-6. ` +
+            `Chat alone (gateway.chat) remains usable. Fix: \`gbrain config set ${source} anthropic:claude-sonnet-4-6\` or another supports_subagent_loop model.`,
+        };
+      }
       if (verdict === 'unknown') {
         return {
           name: 'subagent_capability',

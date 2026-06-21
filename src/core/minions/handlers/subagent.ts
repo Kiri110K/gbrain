@@ -186,31 +186,36 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // Default is the legacy path so v0.38 patch releases ship the same
     // behavior as v0.37. Users dogfood the gateway path by flipping the flag.
     //
-    // Refuse-at-handler-entry when the model literally lacks tool calling
-    // OR is from an unknown provider. The queue.ts gate already catches this
-    // for queue-submitted jobs; the check here covers direct `gbrain agent run`
-    // invocations and any code path that bypasses the queue's capability check.
-    if (data.model) {
-      const verdict = classifyCapabilities(data.model);
-      if (verdict === 'unusable:no_tools') {
-        throw new Error(
-          `subagent job rejected: data.model "${data.model}" lacks native tool calling. ` +
-          `The subagent loop dispatches brain ops via tool calls — without tool support the loop has no way to run.`,
-        );
-      }
-      if (verdict === 'unknown') {
-        throw new Error(
-          `subagent job rejected: data.model "${data.model}" references an unknown provider. ` +
-          `Use format provider:model where provider matches a recipe in src/core/ai/recipes/.`,
-        );
-      }
-    }
+    // Refuse when the resolved model lacks tool calling, lacks explicit
+    // subagent-loop approval, OR is from an unknown provider. The queue.ts
+    // gate already catches this for queue-submitted jobs; the check here covers
+    // direct `gbrain agent run`, legacy `models.subagent`, and any code path
+    // that bypasses the queue's capability check.
     const model = data.model
       ?? await resolveModel(engine, {
         tier: 'subagent',
         configKey: 'models.subagent',
         fallback: TIER_DEFAULTS.subagent,
       });
+    const capabilityVerdict = classifyCapabilities(model);
+    if (capabilityVerdict === 'unusable:no_tools') {
+      throw new Error(
+        `subagent job rejected: model "${model}" lacks native tool calling. ` +
+        `The subagent loop dispatches brain ops via tool calls — without tool support the loop has no way to run.`,
+      );
+    }
+    if (capabilityVerdict === 'unusable:no_subagent_loop') {
+      throw new Error(
+        `subagent job rejected: model "${model}" is not approved for the gbrain subagent loop. ` +
+        `The recipe may support chat/tools, but supports_subagent_loop is not true, so replay/safety coverage is not established.`,
+      );
+    }
+    if (capabilityVerdict === 'unknown') {
+      throw new Error(
+        `subagent job rejected: model "${model}" references an unknown provider. ` +
+        `Use format provider:model where provider matches a recipe in src/core/ai/recipes/.`,
+      );
+    }
     const maxTurns = data.max_turns ?? DEFAULT_MAX_TURNS;
     // v0.41 Approach C: systemPrompt is now built AFTER toolDefs (a few
     // lines below) so the renderer can splice a tool-usage preamble
@@ -219,9 +224,8 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // block stays a hit across turns.
 
     // v0.38 S1.10 — feature flag for the gateway-native tool loop. When ON,
-    // route ALL subagent jobs through gateway.toolLoop() (works for every
-    // provider in src/core/ai/recipes/). When OFF, route through the legacy
-    // Anthropic-direct path AND refuse non-Anthropic models loudly.
+    // route approved subagent-loop models through gateway.toolLoop(). When OFF,
+    // route through the legacy Anthropic-direct path AND refuse non-Anthropic models loudly.
     const useGatewayLoopRaw = await engine.getConfig('agent.use_gateway_loop').catch(() => null);
     const useGatewayLoop = typeof useGatewayLoopRaw === 'string' &&
       (useGatewayLoopRaw === 'true' || useGatewayLoopRaw === '1');

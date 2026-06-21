@@ -33,6 +33,24 @@ describe('envReady', () => {
     expect(ollama).toBeDefined();
     expect(envReady(ollama!, {})).toBe(true);
   });
+
+  test('Codex is ready with preferred GBRAIN_CODEX_ACCESS_TOKEN', () => {
+    const codex = getRecipe('codex');
+    expect(codex).toBeDefined();
+    expect(envReady(codex!, { GBRAIN_CODEX_ACCESS_TOKEN: 'codex-token' })).toBe(true);
+  });
+
+  test('Codex is ready with fallback CODEX_ACCESS_TOKEN', () => {
+    const codex = getRecipe('codex');
+    expect(codex).toBeDefined();
+    expect(envReady(codex!, { CODEX_ACCESS_TOKEN: 'codex-token' })).toBe(true);
+  });
+
+  test('Codex is not ready from OPENAI_API_KEY alone', () => {
+    const codex = getRecipe('codex');
+    expect(codex).toBeDefined();
+    expect(envReady(codex!, { OPENAI_API_KEY: 'sk-test' })).toBe(false);
+  });
 });
 
 describe('formatRecipeTable', () => {
@@ -78,6 +96,24 @@ describe('formatRecipeTable', () => {
     // ZE has embedding but no expansion or chat
     expect(zeLine).toContain('yes');
     expect(zeLine).toContain('—');
+  });
+
+  test('Codex shows no embedding, with expansion and chat enabled', () => {
+    const out = formatRecipeTable(listRecipes(), {});
+    const codexLine = out.split('\n').find(line => line.startsWith('codex'));
+    expect(codexLine).toBeDefined();
+    expect(codexLine).toContain('—');
+    expect(codexLine).toContain('yes');
+    expect(codexLine).toMatch(/codex\s+native\s+—\s+yes\s+yes\s+/);
+  });
+
+  test('Codex missing status names Codex token envs, not OPENAI_API_KEY', () => {
+    const out = formatRecipeTable(listRecipes(), {});
+    const codexLine = out.split('\n').find(line => line.startsWith('codex'));
+    expect(codexLine).toBeDefined();
+    expect(codexLine).toContain('GBRAIN_CODEX_ACCESS_TOKEN');
+    expect(codexLine).toMatch(/(?:or|fallback)[^\n]*\bCODEX_ACCESS_TOKEN\b|\bCODEX_ACCESS_TOKEN\b[^\n]*(?:or|fallback)/);
+    expect(codexLine).not.toContain('OPENAI_API_KEY');
   });
 
   test('isolated subset renders correctly (picker reuses this)', () => {

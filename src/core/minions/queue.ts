@@ -94,10 +94,10 @@ export class MinionQueue {
       );
     }
     // v0.38 (S1.7 + D6) — capability-based gate replaces the v0.31.12 Anthropic
-    // pin. The subagent loop now routes through `gateway.toolLoop()` so any
-    // provider with native tool calling works. Only refuse-at-submit when
-    // the requested model literally cannot run a tool loop. The handler
-    // (`subagent.ts`) does a defense-in-depth check at dispatch time too.
+    // pin. Native tool calling is necessary but not sufficient: recipes must
+    // explicitly declare `supports_subagent_loop: true` before the autonomous
+    // subagent loop may use them. Normal gateway.chat tool use is separate.
+    // The handler (`subagent.ts`) does a defense-in-depth check at dispatch time too.
     if (jobName === 'subagent' && data && typeof data === 'object') {
       const submittedModel = (data as { model?: unknown }).model;
       if (typeof submittedModel === 'string' && submittedModel.length > 0) {
@@ -108,6 +108,13 @@ export class MinionQueue {
             `subagent job rejected: data.model "${submittedModel}" lacks native tool calling. ` +
             `The subagent loop dispatches brain ops via tool calls — without tool support the loop has no way to run. ` +
             `Pick a provider that supports tools (anthropic, openai, google, openrouter, litellm-proxy, deepseek, groq, together, azure-openai).`,
+          );
+        }
+        if (verdict === 'unusable:no_subagent_loop') {
+          throw new Error(
+            `subagent job rejected: data.model "${submittedModel}" is not approved for the gbrain subagent loop. ` +
+            `The recipe may support chat/tools, but supports_subagent_loop is not true, so replay/safety coverage is not established. ` +
+            `Use a model whose recipe declares supports_subagent_loop=true (for example anthropic:claude-sonnet-4-6, openai:gpt-5.2, or google:gemini-1.5-pro).`,
           );
         }
         if (verdict === 'unknown') {
