@@ -510,24 +510,22 @@ function buildCodexRequestBody(input: {
     ...wireRuntime
   } = toCodexWireRuntimeOptions(runtime);
   const promptCacheKey = input.cfg.promptCacheKey?.trim();
-  const wireRuntimeForRequest = promptCacheKey
-    ? Object.fromEntries(Object.entries(wireRuntime).filter(([key]) => key !== 'service_tier'))
-    : wireRuntime;
 
   const body: JsonRecord = {
     model: input.cfg.model,
     input: toCodexInput(input.messages),
     stream: true,
-    ...wireRuntimeForRequest,
+    ...wireRuntime,
   };
 
   const systemInstructions = input.system?.trim() || DEFAULT_CODEX_INSTRUCTIONS;
   body.instructions = systemInstructions;
 
   if (promptCacheKey) {
-    // Live Codex cache probes showed `service_tier: priority` hurts cache
-    // locality. Cache-keyed tool/subagent loops choose cache stickiness over
-    // fast-tier latency even when the profile slug includes `-fast`.
+    // `prompt_cache_key` provides body-level cache affinity; Codex/Hermes-style
+    // routing headers are sent with the HTTP request. Keep runtime options such
+    // as `service_tier: priority` intact so fast profiles can combine priority
+    // tier with prompt-cache routing.
     body.prompt_cache_key = promptCacheKey;
   }
 

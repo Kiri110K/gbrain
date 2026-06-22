@@ -174,7 +174,7 @@ describe('gateway.chat Codex routing', () => {
 
     const body = bodyOf(calls[0]);
     expect(body.prompt_cache_key).toBe('gbrain-subagent-99');
-    expect(body.service_tier).toBeUndefined();
+    expect(body.service_tier).toBe('priority');
   });
 
   test('invalid scoped Codex profile suffix fails before any network call', async () => {

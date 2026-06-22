@@ -172,7 +172,7 @@ describe('gateway.toolLoop Codex Responses transport', () => {
     const firstBody = requestBody(calls[0]);
     expect(firstBody.model).toBe('gpt-5.5');
     expect(firstBody.reasoning).toEqual({ effort: 'medium', summary: 'auto' });
-    expect(firstBody.service_tier).toBeUndefined();
+    expect(firstBody.service_tier).toBe('priority');
     expect(firstBody.prompt_cache_key).toBe('gbrain-subagent-123');
     expect(headerValue(calls[0].init?.headers, 'session_id')).toBe('gbrain-subagent-123');
     expect(headerValue(calls[0].init?.headers, 'session-id')).toBe('gbrain-subagent-123');
