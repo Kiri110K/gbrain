@@ -607,6 +607,10 @@ describe('codexChat HTTP transport', () => {
       const body = parseRequestBody(calls[0]);
       expect(body.prompt_cache_key).toBe('gbrain-subagent-42');
       expect(body.service_tier).toBeUndefined();
+      expect(headerValue(calls[0].init?.headers, 'session_id')).toBe('gbrain-subagent-42');
+      expect(headerValue(calls[0].init?.headers, 'session-id')).toBe('gbrain-subagent-42');
+      expect(headerValue(calls[0].init?.headers, 'thread-id')).toBe('gbrain-subagent-42');
+      expect(headerValue(calls[0].init?.headers, 'x-client-request-id')).toBe('gbrain-subagent-42');
       expect(result.usage).toEqual({
         input_tokens: 4096,
         output_tokens: 7,

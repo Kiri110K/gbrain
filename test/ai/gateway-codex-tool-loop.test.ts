@@ -28,6 +28,19 @@ function requestBody(call: FetchCall): Record<string, unknown> {
   return JSON.parse(String(call.init?.body)) as Record<string, unknown>;
 }
 
+function headerValue(headers: HeadersInit | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) return headers.get(name) ?? undefined;
+  const lower = name.toLowerCase();
+  if (Array.isArray(headers)) {
+    const found = headers.find(([key]) => key.toLowerCase() === lower);
+    return found?.[1];
+  }
+  const record = headers as Record<string, string>;
+  const key = Object.keys(record).find((candidate) => candidate.toLowerCase() === lower);
+  return key ? record[key] : undefined;
+}
+
 function functionCallResponse(input: {
   callId: string;
   name: string;
@@ -161,6 +174,10 @@ describe('gateway.toolLoop Codex Responses transport', () => {
     expect(firstBody.reasoning).toEqual({ effort: 'medium', summary: 'auto' });
     expect(firstBody.service_tier).toBeUndefined();
     expect(firstBody.prompt_cache_key).toBe('gbrain-subagent-123');
+    expect(headerValue(calls[0].init?.headers, 'session_id')).toBe('gbrain-subagent-123');
+    expect(headerValue(calls[0].init?.headers, 'session-id')).toBe('gbrain-subagent-123');
+    expect(headerValue(calls[0].init?.headers, 'thread-id')).toBe('gbrain-subagent-123');
+    expect(headerValue(calls[0].init?.headers, 'x-client-request-id')).toBe('gbrain-subagent-123');
     expect(firstBody.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Look up codex replay safety.' }] },
     ]);

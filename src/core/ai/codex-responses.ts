@@ -45,6 +45,27 @@ function stringifyPayload(value: unknown): string {
   }
 }
 
+function codexHeaderSafeCacheKey(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const safe = trimmed.replace(/[^\x21-\x7e]+/g, '-').slice(0, 200);
+  return safe || undefined;
+}
+
+function codexCacheRoutingHeaders(promptCacheKey: string | undefined): Record<string, string> {
+  const cacheScopeId = codexHeaderSafeCacheKey(promptCacheKey);
+  if (!cacheScopeId) return {};
+  return {
+    // Hermes currently sends `session_id`; upstream Codex CLI sends the
+    // hyphenated session/thread headers. Live probes showed these routing
+    // headers are load-bearing for reliable ChatGPT Codex prompt-cache hits.
+    session_id: cacheScopeId,
+    'session-id': cacheScopeId,
+    'thread-id': cacheScopeId,
+    'x-client-request-id': cacheScopeId,
+  };
+}
+
 /**
  * Convert gbrain's provider-neutral chat history into Codex Responses-style input.
  *
@@ -541,6 +562,7 @@ export async function codexChat(input: {
       headers: {
         Authorization: `Bearer ${cfg.accessToken}`,
         'Content-Type': 'application/json',
+        ...codexCacheRoutingHeaders(cfg.promptCacheKey),
       },
       body: JSON.stringify(buildCodexRequestBody(input)),
       signal: cfg.signal,
