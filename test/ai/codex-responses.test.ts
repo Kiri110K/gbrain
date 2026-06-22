@@ -331,6 +331,7 @@ describe('codexChat HTTP transport', () => {
           model: 'gpt-5.5',
           instructions: 'Keep answers short.',
           input: toCodexInput([{ role: 'user', content: 'Hello' }]),
+          stream: true,
           store: false,
           reasoning: { effort: 'medium', summary: 'auto' },
         });
@@ -349,6 +350,154 @@ describe('codexChat HTTP transport', () => {
           providerId: 'codex',
         });
       });
+    } finally {
+      restore();
+    }
+  });
+
+  test('default instructions are sent when no system prompt is provided', async () => {
+    const { calls, restore } = installJsonResponseFetch(codexTextResponse());
+    try {
+      await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'No system prompt.' }],
+      });
+
+      const body = parseRequestBody(calls[0]);
+      expect(body.instructions).toBe('Follow the user request.');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE response normalizes to ChatResult', async () => {
+    const sse = [
+      'data: {"type":"response.output_text.delta","delta":"Hello"}',
+      '',
+      'data: {"type":"response.output_text.delta","delta":" from stream."}',
+      '',
+      'data: {"type":"response.completed","response":{"id":"resp_stream","status":"completed","usage":{"input_tokens":5,"output_tokens":4}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'Stream please.' }],
+      });
+
+      expect(result.text).toBe('Hello from stream.');
+      expect(result.blocks).toEqual([{ type: 'text', text: 'Hello from stream.' }]);
+      expect(result.usage).toEqual({
+        input_tokens: 5,
+        output_tokens: 4,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+      });
+      expect(result.stopReason).toBe('end');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE can use final response output when no text deltas were emitted', async () => {
+    const sse = [
+      'data: {"type":"response.completed","response":{"id":"resp_final","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Final only."}]}],"usage":{"input_tokens":6,"output_tokens":2}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'Final only please.' }],
+      });
+
+      expect(result.text).toBe('Final only.');
+      expect(result.stopReason).toBe('end');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE error events are redacted before throwing', async () => {
+    const providerBearerToken = 'provider-stream-secret';
+    const sse = [
+      `data: {"type":"error","message":"raw=${CODEX_ACCESS_TOKEN}; Authorization: Bearer ${providerBearerToken}"}`,
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'Stream error.' }],
+        }),
+        AITransientError,
+      );
+
+      expect(err.message).toContain('Codex Responses stream error');
+      expect(err.message).not.toContain(CODEX_ACCESS_TOKEN);
+      expect(err.message).not.toContain(providerBearerToken);
+      expect(err.message).toContain('[REDACTED]');
+      expect(err.message).toContain('Authorization: Bearer ***');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE failed terminal responses throw instead of normalizing as success', async () => {
+    const sse = [
+      'data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"message":"backend failed"},"usage":{"input_tokens":6,"output_tokens":0}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'Stream failed.' }],
+        }),
+        AITransientError,
+      );
+
+      expect(err.message).toContain('Codex Responses stream failed');
+      expect(err.message).toContain('backend failed');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE truncated after deltas throws instead of returning partial success', async () => {
+    const sse = [
+      'data: {"type":"response.output_text.delta","delta":"partial"}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'Truncate.' }],
+        }),
+        AITransientError,
+      );
+
+      expect(err.message).toContain('did not emit a terminal response event');
     } finally {
       restore();
     }
@@ -437,7 +586,7 @@ describe('codexChat HTTP transport', () => {
     }
   });
 
-  test('max_output_tokens is included only for positive finite maxOutputTokens', async () => {
+  test('max_output_tokens is omitted because the ChatGPT Codex backend rejects it', async () => {
     const { calls, restore } = installJsonResponseFetch(codexTextResponse());
     try {
       for (const maxOutputTokens of [128, 0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
@@ -447,8 +596,7 @@ describe('codexChat HTTP transport', () => {
         });
       }
 
-      expect(parseRequestBody(calls[0]).max_output_tokens).toBe(128);
-      for (const call of calls.slice(1)) {
+      for (const call of calls) {
         expect(parseRequestBody(call).max_output_tokens).toBeUndefined();
       }
     } finally {

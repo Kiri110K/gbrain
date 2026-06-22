@@ -6,6 +6,7 @@ import {
   type CodexRuntimeOptions,
 } from './codex-profiles.ts';
 
+const DEFAULT_CODEX_INSTRUCTIONS = 'Follow the user request.';
 type JsonRecord = Record<string, unknown>;
 type CodexTextPart = { type: 'input_text' | 'output_text'; text: string };
 
@@ -342,6 +343,137 @@ async function readCodexResponseText(
   }
 }
 
+function sseDataPayloads(rawText: string): string[] {
+  const events: string[] = [];
+  let current: string[] = [];
+  for (const line of rawText.split(/\r?\n/)) {
+    if (line === '') {
+      if (current.length > 0) {
+        events.push(current.join('\n'));
+        current = [];
+      }
+      continue;
+    }
+    if (line.startsWith('data:')) {
+      current.push(line.slice(5).trimStart());
+    }
+  }
+  if (current.length > 0) events.push(current.join('\n'));
+  return events;
+}
+
+function sseOutputTextMessage(text: string): JsonRecord {
+  return {
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'output_text', text }],
+  };
+}
+
+function parseCodexSseResponse(
+  rawText: string,
+  secrets: Array<string | null | undefined>,
+): JsonRecord {
+  const payloads = sseDataPayloads(rawText);
+  if (payloads.length === 0) {
+    throw new Error('not a Codex SSE response');
+  }
+  const output: unknown[] = [];
+  const textDeltas: string[] = [];
+  let terminalOutput: unknown[] | undefined;
+  let terminalOutputText: string | undefined;
+  let usage: unknown;
+  let id: string | undefined;
+  let status = 'completed';
+  let incompleteDetails: unknown;
+  let error: unknown;
+  let terminalSeen = false;
+
+  for (const payload of payloads) {
+    if (!payload || payload === '[DONE]') continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(payload) as unknown;
+    } catch {
+      continue;
+    }
+    if (!isRecord(event)) continue;
+    const type = asString(event.type) ?? '';
+    if (type === 'error') {
+      const redacted = redactCodexSecrets(JSON.stringify(event), secrets);
+      throw new AITransientError(`Codex Responses stream error: ${redacted}`, new Error(redacted));
+    }
+    if (type === 'response.output_text.delta' && typeof event.delta === 'string') {
+      textDeltas.push(event.delta);
+      continue;
+    }
+    if (type === 'response.output_item.done' && event.item !== undefined) {
+      output.push(event.item);
+      continue;
+    }
+    if (type === 'response.completed' || type === 'response.incomplete' || type === 'response.failed') {
+      terminalSeen = true;
+      const response = isRecord(event.response) ? event.response : undefined;
+      if (response) {
+        usage = response.usage ?? usage;
+        id = asString(response.id) ?? id;
+        status = asString(response.status) ?? status;
+        incompleteDetails = response.incomplete_details ?? incompleteDetails;
+        error = response.error ?? error;
+        if (Array.isArray(response.output)) terminalOutput = response.output;
+        terminalOutputText = asString(response.output_text) ?? terminalOutputText;
+      }
+      if (type === 'response.incomplete') status = 'incomplete';
+      if (type === 'response.failed') status = 'failed';
+    }
+  }
+
+  if (!terminalSeen) {
+    throw new AITransientError('Codex Responses stream did not emit a terminal response event.');
+  }
+
+  if (status === 'failed') {
+    const detail = error !== undefined ? `: ${redactCodexSecrets(JSON.stringify(error), secrets)}` : '';
+    throw new AITransientError(`Codex Responses stream failed${detail}`);
+  }
+
+  if (output.length === 0 && textDeltas.length > 0) {
+    output.push(sseOutputTextMessage(textDeltas.join('')));
+  }
+
+  if (output.length === 0 && terminalOutput && terminalOutput.length > 0) {
+    output.push(...terminalOutput);
+  }
+
+  if (output.length === 0 && terminalOutputText) {
+    output.push(sseOutputTextMessage(terminalOutputText));
+  }
+
+  if (output.length === 0 && !usage) {
+    throw new AITransientError('Codex Responses stream did not emit a completed response.');
+  }
+
+  return {
+    id,
+    status,
+    output,
+    usage,
+    incomplete_details: incompleteDetails,
+    error,
+  };
+}
+
+function parseCodexResponsePayload(
+  rawText: string,
+  secrets: Array<string | null | undefined>,
+): unknown {
+  try {
+    return JSON.parse(rawText) as unknown;
+  } catch {
+    return parseCodexSseResponse(rawText, secrets);
+  }
+}
+
 function buildCodexRequestBody(input: {
   cfg: CodexResponsesConfig;
   system?: string;
@@ -357,12 +489,12 @@ function buildCodexRequestBody(input: {
   const body: JsonRecord = {
     model: input.cfg.model,
     input: toCodexInput(input.messages),
+    stream: true,
     ...wireRuntime,
   };
 
-  if (input.system && input.system.trim().length > 0) {
-    body.instructions = input.system;
-  }
+  const systemInstructions = input.system?.trim() || DEFAULT_CODEX_INSTRUCTIONS;
+  body.instructions = systemInstructions;
 
   const tools = toCodexTools(input.tools);
   if (tools && tools.length > 0) {
@@ -371,9 +503,9 @@ function buildCodexRequestBody(input: {
     body.parallel_tool_calls = codexParallelToolCalls;
   }
 
-  if (Number.isFinite(input.cfg.maxOutputTokens) && Number(input.cfg.maxOutputTokens) > 0) {
-    body.max_output_tokens = input.cfg.maxOutputTokens;
-  }
+  // The ChatGPT Codex backend currently rejects max_output_tokens even though
+  // it otherwise uses Responses-shaped input. Keep the config field for future
+  // backends, but do not put it on the wire for this dedicated Codex transport.
 
   return body;
 }
@@ -422,11 +554,12 @@ export async function codexChat(input: {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawText) as unknown;
+    parsed = parseCodexResponsePayload(rawText, secrets);
   } catch (err) {
+    if (err instanceof AITransientError || err instanceof AIConfigError) throw err;
     const redacted = redactCodexSecrets(codexErrorText(err), secrets);
     throw new AITransientError(
-      `Codex Responses request returned invalid JSON: ${redactedText || redacted}`,
+      `Codex Responses request returned invalid JSON/SSE: ${redactedText || redacted}`,
       new Error(redacted),
     );
   }

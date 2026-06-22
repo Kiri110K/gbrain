@@ -120,8 +120,9 @@ describe('gateway.chat Codex routing', () => {
       instructions: 'Answer tersely.',
       store: false,
       reasoning: { effort: 'medium', summary: 'auto' },
-      max_output_tokens: 777,
+      stream: true,
     });
+    expect(body.max_output_tokens).toBeUndefined();
     expect(body.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Say hello.' }] },
     ]);
