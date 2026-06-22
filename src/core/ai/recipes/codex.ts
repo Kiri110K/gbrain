@@ -29,7 +29,10 @@ export const codex: Recipe = {
       models: [...CODEX_BASE_MODELS],
       supports_tools: true,
       supports_subagent_loop: true,
-      supports_prompt_cache: false,
+      // Codex/OpenAI prompt caching is automatic for long shared prefixes;
+      // the dedicated transport supplies `prompt_cache_key` when callers set
+      // cacheSystem so tool loops get sticky cache routing across turns.
+      supports_prompt_cache: true,
       max_context_tokens: 200000,
     },
   },

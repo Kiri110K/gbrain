@@ -26,8 +26,10 @@ describe('CANONICAL_PRICING — table integrity', () => {
     for (const [key, p] of Object.entries(CANONICAL_PRICING)) {
       expect(Number.isFinite(p.input)).toBe(true);
       expect(Number.isFinite(p.output)).toBe(true);
+      if (p.cachedInput !== undefined) expect(Number.isFinite(p.cachedInput)).toBe(true);
       expect(p.input).toBeGreaterThan(0);
       expect(p.output).toBeGreaterThan(0);
+      if (p.cachedInput !== undefined) expect(p.cachedInput).toBeGreaterThan(0);
       // Provider-prefixed key (sanity guard against a bare key sneaking in).
       // NOTE: deliberately NO output>=input invariant — symmetric pricing is
       // legitimate (e.g. together:...Llama-3.3 is 0.88/0.88).
@@ -70,6 +72,14 @@ describe('canonicalLookup — id normalization', () => {
 
   test('nested OpenRouter id → MISS (markup ≠ native pricing)', () => {
     expect(canonicalLookup('openrouter:anthropic/claude-sonnet-4-6')).toBeUndefined();
+  });
+
+  test('Codex scoped profile → priced Codex base model with cached-input rate', () => {
+    expect(canonicalLookup('codex:gpt-5.5-medium-fast')).toEqual({
+      input: 5.0,
+      cachedInput: 0.5,
+      output: 30.0,
+    });
   });
 
   test('slash-bearing model tail kept as exact key (together Llama)', () => {

@@ -8,8 +8,10 @@
  *   - eval-contradictions/cost-tracker.ts (silent-Haiku-fallback view)
  *   - cross-modal-eval/runner.ts    (multi-provider eval panel)
  *   - skillopt/preflight.ts         (Sonnet-fallback warn-only estimate)
- * The bare-keyed `ANTHROPIC_PRICING` view is itself consumed by budget/budget-tracker.ts,
- * minions/batch-projection.ts, and cycle/budget-meter.ts — so those inherit canonical too.
+ * The bare-keyed `ANTHROPIC_PRICING` view is itself consumed by Anthropic-only
+ * cost helpers, while budget/budget-tracker.ts now reads this canonical table
+ * directly so non-Anthropic providers (including Codex scoped slugs) can be
+ * budget-gated too.
  *
  * The dollar amounts live HERE ONCE — update prices in this file only. Each
  * consumer keeps its own key allowlist and miss-handling policy (fail-closed
@@ -36,9 +38,13 @@
 
 import { splitProviderModelId } from './model-id.ts';
 
+const PRICED_CODEX_BASE_MODELS = ['gpt-5.5'] as const;
+
 export interface ModelPricing {
   /** USD per 1M input tokens. */
   input: number;
+  /** USD per 1M cached input tokens, when the provider reports prompt-cache hits. */
+  cachedInput?: number;
   /** USD per 1M output tokens. */
   output: number;
 }
@@ -67,8 +73,12 @@ export const CANONICAL_PRICING: Record<string, ModelPricing> = {
   // ── OpenAI ─────────────────────────────────────────────────────────────
   'openai:gpt-4o':                        { input:  2.50, output: 10.00 },
   'openai:gpt-4o-mini':                   { input:  0.15, output:  0.60 },
-  'openai:gpt-5':                         { input:  5.00, output: 20.00 },
-  'openai:gpt-5.5':                       { input:  4.00, output: 16.00 },
+  'openai:gpt-5':                         { input:  5.00, cachedInput: 0.50, output: 20.00 },
+  // GPT-5.5 short-context (<272K input) list price; cached input is 90% cheaper.
+  'openai:gpt-5.5':                       { input:  5.00, cachedInput: 0.50, output: 30.00 },
+  // Codex/ChatGPT OAuth backend uses OpenAI-family Responses models; keep the
+  // base Codex provider id priced so scoped slugs can lower through it.
+  'codex:gpt-5.5':                        { input:  5.00, cachedInput: 0.50, output: 30.00 },
 
   // ── Google ─────────────────────────────────────────────────────────────
   'google:gemini-1.5-pro':                { input:  1.25, output:  5.00 },
@@ -109,6 +119,12 @@ export function canonicalLookup(
   // 2. Normalize bare/slash via the shared splitter (colon-first precedence).
   const { provider, model } = splitProviderModelId(modelId);
   if (!model) return undefined;
+  if (provider === 'codex') {
+    const base = [...PRICED_CODEX_BASE_MODELS]
+      .sort((a, b) => b.length - a.length)
+      .find((candidate) => model === candidate || model.startsWith(`${candidate}-`));
+    if (base) return CANONICAL_PRICING[`codex:${base}`] ?? CANONICAL_PRICING[`openai:${base}`];
+  }
   const key = provider ? `${provider}:${model}` : `anthropic:${model}`;
   return CANONICAL_PRICING[key];
 }

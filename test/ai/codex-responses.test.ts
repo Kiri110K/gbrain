@@ -586,6 +586,34 @@ describe('codexChat HTTP transport', () => {
     }
   });
 
+  test('prompt cache key is sent when configured and cached-token usage is normalized', async () => {
+    const { calls, restore } = installJsonResponseFetch({
+      ...codexTextResponse('Cached response.'),
+      usage: {
+        input_tokens: 4096,
+        output_tokens: 7,
+        input_tokens_details: { cached_tokens: 3072 },
+      },
+    });
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg({ promptCacheKey: 'gbrain-subagent-42' }),
+        messages: [{ role: 'user', content: 'Use cache routing.' }],
+      });
+
+      const body = parseRequestBody(calls[0]);
+      expect(body.prompt_cache_key).toBe('gbrain-subagent-42');
+      expect(result.usage).toEqual({
+        input_tokens: 4096,
+        output_tokens: 7,
+        cache_read_tokens: 3072,
+        cache_creation_tokens: 0,
+      });
+    } finally {
+      restore();
+    }
+  });
+
   test('max_output_tokens is omitted because the ChatGPT Codex backend rejects it', async () => {
     const { calls, restore } = installJsonResponseFetch(codexTextResponse());
     try {

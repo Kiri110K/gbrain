@@ -160,14 +160,19 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
   afterAll(() => clearGateway());
 
   it('happy path 1-turn: gateway returns text, handler returns SubagentResult', async () => {
-    __setChatTransportForTests(async () => ({
+    let observedPromptCacheKey: string | undefined;
+    __setChatTransportForTests(async (opts) => {
+      observedPromptCacheKey = opts.promptCacheKey;
+      expect(opts.cacheSystem).toBe(true);
+      return {
       text: 'all done',
       blocks: [{ type: 'text', text: 'all done' }] as ChatBlock[],
       stopReason: 'end',
       usage: { input_tokens: 12, output_tokens: 3, cache_read_tokens: 0, cache_creation_tokens: 0 },
       model: 'anthropic:claude-sonnet-4-6',
       providerId: 'anthropic',
-    } satisfies ChatResult));
+    } satisfies ChatResult;
+    });
 
     const executions: Array<{ name: string; input: unknown; ts: number }> = [];
     const tools = makeStubTools(executions);
@@ -176,6 +181,7 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
 
     const result = await handler(ctx);
 
+    expect(observedPromptCacheKey).toBe(`gbrain-subagent-${jobId}`);
     expect(result.result).toBe('all done');
     expect(result.stop_reason).toBe('end_turn');
     expect(result.tokens.in).toBeGreaterThanOrEqual(12);

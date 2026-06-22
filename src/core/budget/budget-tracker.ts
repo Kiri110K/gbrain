@@ -31,7 +31,7 @@
 import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { gbrainPath } from '../config.ts';
-import { ANTHROPIC_PRICING, type ModelPricing } from '../anthropic-pricing.ts';
+import { canonicalLookup, type ModelPricing } from '../model-pricing.ts';
 import { EMBEDDING_PRICING, lookupEmbeddingPrice } from '../embedding-pricing.ts';
 import { splitProviderModelId } from '../model-id.ts';
 import { isoWeekFilename, resolveAuditDir } from '../audit-week-file.ts';
@@ -53,6 +53,10 @@ export interface BudgetActualUsage {
   modelId: string;
   inputTokens: number;
   outputTokens?: number;
+  /** Provider-reported prompt-cache-hit input tokens. Charged at cachedInput when priced. */
+  cacheReadTokens?: number;
+  /** Provider-reported cache-write tokens. Audit only until provider-specific create pricing is modeled. */
+  cacheCreationTokens?: number;
   /** For embeddings: dimension count, surfaces in audit only. */
   embeddingDims?: number;
   /** Optional label echo for the audit row. */
@@ -182,18 +186,12 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
     }
     return null;
   }
-  // chat or rerank: try bare key first, then provider:model or provider/model.
-  // v0.41.21.0: route through splitProviderModelId so slash-prefixed ids
-  // (the form `--judge-model` and OpenRouter recipes emit) hit the pricing
-  // table. Pre-fix, slash-form silently no_pricing-failed `--max-cost` on
-  // brainstorm/lsd.
-  const bare = ANTHROPIC_PRICING[modelId];
-  if (bare) return bare;
-  const { provider: providerId, model: modelTail } = splitProviderModelId(modelId);
-  if (modelTail) {
-    const tailHit = ANTHROPIC_PRICING[modelTail];
-    if (tailHit) return tailHit;
-  }
+  // chat or rerank: use the canonical paid chat pricing table. It handles
+  // bare Anthropic ids, provider-prefixed ids, slash-prefixed ids, and Codex
+  // scoped profile slugs (lowered to their priced base model).
+  const canonical = canonicalLookup(modelId);
+  if (canonical) return canonical;
+  const { provider: providerId } = splitProviderModelId(modelId);
   // v0.40.6.1: zero-price local-inference rerank providers so the budget
   // tracker's TX2 hard-fail doesn't trip on `llama-server-reranker:<model>`
   // under `--max-cost`. Only the rerank kind — chat/embed already have
@@ -204,10 +202,21 @@ function lookupPricing(modelId: string, kind: BudgetKind): ModelPricing | null {
   return null;
 }
 
-function costForUsage(modelId: string, inputTokens: number, outputTokens: number, kind: BudgetKind): number | null {
+function costForUsage(
+  modelId: string,
+  inputTokens: number,
+  outputTokens: number,
+  kind: BudgetKind,
+  cacheReadTokens = 0,
+): number | null {
   const p = lookupPricing(modelId, kind);
   if (!p) return null;
-  return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
+  const boundedCacheRead = Math.max(0, Math.min(inputTokens, cacheReadTokens));
+  const uncachedInputTokens = Math.max(0, inputTokens - boundedCacheRead);
+  const cachedInputPrice = p.cachedInput ?? p.input;
+  return (uncachedInputTokens / 1_000_000) * p.input
+    + (boundedCacheRead / 1_000_000) * cachedInputPrice
+    + (outputTokens / 1_000_000) * p.output;
 }
 
 export class BudgetTracker {
@@ -274,8 +283,9 @@ export class BudgetTracker {
         // TX2: hard-fail when a cap is set but pricing is missing — without
         // pricing we can't enforce the cap, and silently ignoring it would
         // void the contract.
+        const pricingFile = estimate.kind === 'embed' ? 'embedding-pricing.ts' : 'model-pricing.ts';
         const msg = `${this.opts.label}: no pricing entry for model "${estimate.modelId}" (kind=${estimate.kind}). ` +
-          `Add it to src/core/${estimate.kind === 'embed' ? 'embedding-pricing.ts' : 'anthropic-pricing.ts'} or drop --max-cost.`;
+          `Add it to src/core/${pricingFile} or drop --max-cost.`;
         this.fireExhausted();
         throw new BudgetExhausted(msg, {
           reason: 'no_pricing',
@@ -357,7 +367,15 @@ export class BudgetTracker {
   record(actual: BudgetActualUsage & { kind?: BudgetKind }): void {
     this.callsRecorded++;
     const kind: BudgetKind = actual.kind ?? 'chat';
-    const cost = costForUsage(actual.modelId, actual.inputTokens, actual.outputTokens ?? 0, kind);
+    const cacheReadTokens = Math.max(0, Math.min(actual.inputTokens, actual.cacheReadTokens ?? 0));
+    const billableUncachedInputTokens = Math.max(0, actual.inputTokens - cacheReadTokens);
+    const cost = costForUsage(
+      actual.modelId,
+      actual.inputTokens,
+      actual.outputTokens ?? 0,
+      kind,
+      cacheReadTokens,
+    );
 
     if (cost === null) {
       // Unpriced model: record audit but skip cumulative math. Cap (if set)
@@ -373,6 +391,9 @@ export class BudgetTracker {
         sub_label: actual.label,
         input_tokens: actual.inputTokens,
         output_tokens: actual.outputTokens ?? 0,
+        cache_read_tokens: cacheReadTokens,
+        cache_creation_tokens: actual.cacheCreationTokens ?? 0,
+        billable_uncached_input_tokens: billableUncachedInputTokens,
         embedding_dims: actual.embeddingDims ?? null,
       });
       return;
@@ -389,6 +410,9 @@ export class BudgetTracker {
       sub_label: actual.label,
       input_tokens: actual.inputTokens,
       output_tokens: actual.outputTokens ?? 0,
+      cache_read_tokens: cacheReadTokens,
+      cache_creation_tokens: actual.cacheCreationTokens ?? 0,
+      billable_uncached_input_tokens: billableUncachedInputTokens,
       embedding_dims: actual.embeddingDims ?? null,
       actual_cost_usd: cost,
       cumulative_cost_usd: this.cumulativeUsd,
@@ -488,4 +512,5 @@ function numericOrNull(v: unknown): number | null {
 }
 
 /** Re-export the pricing maps for introspection / test setup. */
-export { ANTHROPIC_PRICING, EMBEDDING_PRICING };
+export { ANTHROPIC_PRICING } from '../anthropic-pricing.ts';
+export { EMBEDDING_PRICING };

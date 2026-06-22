@@ -31,11 +31,12 @@ describe('recipe: codex', () => {
     expect(listRecipes().map(recipe => recipe.id)).toContain('codex');
   });
 
-  test('keeps Codex chat/tool-capable and approved for subagent loops after replay safety coverage', () => {
+  test('keeps Codex chat/tool-capable, prompt-cache routed, and approved for subagent loops', () => {
     const r = getRecipe('codex');
 
     expect(r?.touchpoints.chat?.supports_tools).toBe(true);
     expect(r?.touchpoints.chat?.supports_subagent_loop).toBe(true);
-    expect(classifyCapabilities('codex:gpt-5.5')).toBe('degraded:no_caching');
+    expect(r?.touchpoints.chat?.supports_prompt_cache).toBe(true);
+    expect(classifyCapabilities('codex:gpt-5.5')).toBe('ok');
   });
 });

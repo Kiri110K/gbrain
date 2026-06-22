@@ -833,6 +833,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     maxTurns,
     abortSignal: ctx.signal,
     cacheSystem,
+    promptCacheKey: `gbrain-subagent-${ctx.id}`,
     // ALWAYS pass replayState (even on fresh runs) so the gateway loop's
     // messageIdx counter starts at `nextMessageIdx` (1 on fresh, after the
     // seed user write above). Without this, the loop defaults to messageIdx=0

@@ -212,7 +212,7 @@ export interface ChatTouchpoint {
    * Strictly stronger than supports_tools.
    */
   supports_subagent_loop: boolean;
-  /** Anthropic-style ephemeral prompt cache markers honored. */
+  /** Provider prompt-cache support (Anthropic cache-control or Responses prompt_cache_key routing). */
   supports_prompt_cache?: boolean;
   max_context_tokens?: number;
   cost_per_1m_input_usd?: number;

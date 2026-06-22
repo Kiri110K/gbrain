@@ -40,9 +40,10 @@ export interface ProviderCapabilities {
   supportsSubagentLoop: boolean;
 
   /**
-   * Anthropic-style ephemeral prompt cache markers honored. When false, the
-   * loop runs hot (no cache_control injection) and per-turn costs scale
-   * linearly with conversation length. Doesn't break the loop; just costs more.
+   * Provider prompt-cache support for autonomous loops. Anthropic uses explicit
+   * ephemeral cache-control markers; Codex/OpenAI Responses uses automatic
+   * prefix caching plus `prompt_cache_key` routing. When false, the loop runs
+   * hot and per-turn costs scale linearly with conversation length.
    */
   supportsPromptCaching: boolean;
 

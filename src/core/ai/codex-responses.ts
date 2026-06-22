@@ -18,6 +18,8 @@ export interface CodexResponsesConfig {
   /** Optional GBrain profile slug preserved in ChatResult/budget labels. */
   profileModel?: string;
   runtime?: CodexRuntimeOptions;
+  /** Optional Responses prompt-cache routing key; improves cache locality across loop turns. */
+  promptCacheKey?: string;
   maxOutputTokens?: number;
   signal?: AbortSignal;
 }
@@ -495,6 +497,11 @@ function buildCodexRequestBody(input: {
 
   const systemInstructions = input.system?.trim() || DEFAULT_CODEX_INSTRUCTIONS;
   body.instructions = systemInstructions;
+
+  const promptCacheKey = input.cfg.promptCacheKey?.trim();
+  if (promptCacheKey) {
+    body.prompt_cache_key = promptCacheKey;
+  }
 
   const tools = toCodexTools(input.tools);
   if (tools && tools.length > 0) {

@@ -135,7 +135,7 @@ describe('BudgetTracker.reserve', () => {
     expect(caught).toBeInstanceOf(BudgetExhausted);
     expect((caught as BudgetExhausted).reason).toBe('no_pricing');
     expect((caught as BudgetExhausted).modelId).toBe('mystery:some-unreleased-model');
-    expect((caught as Error).message).toMatch(/anthropic-pricing\.ts/);
+    expect((caught as Error).message).toMatch(/model-pricing\.ts/);
   });
 
   test('v0.41.20.0: slash-prefix anthropic/claude-* under --max-cost does NOT no_pricing throw (THE FIX)', () => {
@@ -168,6 +168,21 @@ describe('BudgetTracker.reserve', () => {
         kind: 'chat',
       }),
     ).not.toThrow();
+  });
+
+  test('Codex scoped profiles are priced under --max-cost instead of no_pricing failing', () => {
+    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'test', auditPath });
+    expect(() =>
+      t.reserve({
+        modelId: 'codex:gpt-5.5-medium-fast',
+        estimatedInputTokens: 10_000,
+        maxOutputTokens: 1_000,
+        kind: 'chat',
+      }),
+    ).not.toThrow();
+    const audit = readAudit();
+    expect(audit[0].event).toBe('reserve');
+    expect(audit[0].model).toBe('codex:gpt-5.5-medium-fast');
   });
 
   test('no cap + unknown pricing: warns once per process, no throw', () => {
@@ -335,6 +350,26 @@ describe('BudgetTracker.record', () => {
     expect(audit[0].event).toBe('record');
     expect(audit[0].schema_version).toBe(1);
     expect(audit[0].actual_cost_usd).toBeCloseTo(0.0035, 6);
+  });
+
+  test('Codex cached input tokens are charged at cached-input price in budget accounting', () => {
+    const t = new BudgetTracker({ maxCostUsd: 1.0, label: 'test', auditPath });
+    t.record({
+      modelId: 'codex:gpt-5.5-medium-fast',
+      inputTokens: 4096,
+      cacheReadTokens: 3072,
+      outputTokens: 0,
+      kind: 'chat',
+    });
+
+    // GPT-5.5 short-context list price: $5/M input, $0.50/M cached input.
+    // 1024 uncached input + 3072 cached input = 0.00512 + 0.001536.
+    expect(t.totalSpent).toBeCloseTo(0.006656, 9);
+    const audit = readAudit();
+    expect(audit[0].input_tokens).toBe(4096);
+    expect(audit[0].cache_read_tokens).toBe(3072);
+    expect(audit[0].billable_uncached_input_tokens).toBe(1024);
+    expect(audit[0].actual_cost_usd).toBeCloseTo(0.006656, 9);
   });
 
   test('unpriced record: no throw, audited as record_unpriced', () => {

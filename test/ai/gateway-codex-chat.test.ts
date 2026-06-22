@@ -160,6 +160,22 @@ describe('gateway.chat Codex routing', () => {
     expect(body.parallel_tool_calls).toBe(true);
   });
 
+  test('cacheSystem forwards prompt_cache_key to Codex Responses', async () => {
+    configureGateway({
+      chat_model: 'codex:gpt-5.5-medium-fast',
+      env: { GBRAIN_CODEX_ACCESS_TOKEN: CODEX_TOKEN },
+    });
+
+    await chat({
+      messages: [{ role: 'user', content: 'Use prompt cache routing.' }],
+      cacheSystem: true,
+      promptCacheKey: 'gbrain-subagent-99',
+    });
+
+    const body = bodyOf(calls[0]);
+    expect(body.prompt_cache_key).toBe('gbrain-subagent-99');
+  });
+
   test('invalid scoped Codex profile suffix fails before any network call', async () => {
     configureGateway({
       chat_model: 'codex:gpt-5.5-ultra-fast',

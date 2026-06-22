@@ -27,11 +27,11 @@ describe('getProviderCapabilities (v0.38 Slice 1 — D6/D7 recipe-driven capabil
     expect(caps.maxContext).toBe(1000000); // Gemini 1.5 Pro
   });
 
-  it('returns capabilities for Codex chat with subagent-loop replay safety approved', () => {
+  it('returns capabilities for Codex chat with subagent-loop replay safety and prompt-cache routing approved', () => {
     const caps = getProviderCapabilities('codex:gpt-5.5');
     expect(caps.supportsToolCalling).toBe(true);
     expect(caps.supportsSubagentLoop).toBe(true);
-    expect(caps.supportsPromptCaching).toBe(false);
+    expect(caps.supportsPromptCaching).toBe(true);
     expect(caps.maxContext).toBe(200000);
   });
 
@@ -39,7 +39,7 @@ describe('getProviderCapabilities (v0.38 Slice 1 — D6/D7 recipe-driven capabil
     const caps = getProviderCapabilities('codex:gpt-5.5-xhigh-fast');
     expect(caps.supportsToolCalling).toBe(true);
     expect(caps.supportsSubagentLoop).toBe(true);
-    expect(caps.supportsPromptCaching).toBe(false);
+    expect(caps.supportsPromptCaching).toBe(true);
     expect(caps.maxContext).toBe(200000);
   });
 
@@ -77,13 +77,13 @@ describe('classifyCapabilities (D6 — three-tier capability verdict)', () => {
     expect(classifyCapabilities('google:gemini-1.5-pro')).toBe('degraded:no_caching');
   });
 
-  it('returns degraded:no_caching for Codex after autonomous loop replay safety coverage', () => {
-    expect(classifyCapabilities('codex:gpt-5.5')).toBe('degraded:no_caching');
+  it('returns ok for Codex after autonomous loop replay safety and prompt-cache routing coverage', () => {
+    expect(classifyCapabilities('codex:gpt-5.5')).toBe('ok');
   });
 
-  it('returns degraded:no_caching for Codex scoped profiles after autonomous loop replay safety coverage', () => {
-    expect(classifyCapabilities('codex:gpt-5.5-xhigh-fast')).toBe('degraded:no_caching');
-    expect(classifyCapabilities('codex:gpt-5.5-medium-fast')).toBe('degraded:no_caching');
+  it('returns ok for Codex scoped profiles after autonomous loop replay safety and prompt-cache routing coverage', () => {
+    expect(classifyCapabilities('codex:gpt-5.5-xhigh-fast')).toBe('ok');
+    expect(classifyCapabilities('codex:gpt-5.5-medium-fast')).toBe('ok');
   });
 
   it('returns unknown for invalid Codex profile suffixes', () => {

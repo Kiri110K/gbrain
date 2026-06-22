@@ -2578,10 +2578,13 @@ export interface ChatOpts {
   maxTokens?: number;
   abortSignal?: AbortSignal;
   /**
-   * Anthropic-specific: cache the system prompt + last tool def. Silently
-   * ignored on providers without `supports_prompt_cache`.
+   * Provider prompt-cache hint. For Anthropic this injects ephemeral
+   * cache-control markers; for Codex/OpenAI Responses this enables
+   * prompt_cache_key routing when promptCacheKey is supplied.
    */
   cacheSystem?: boolean;
+  /** Stable key for provider prompt-cache routing across related turns/jobs. */
+  promptCacheKey?: string;
 }
 
 /**
@@ -2888,6 +2891,8 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
               modelId: res.model ?? modelStrEarly,
               inputTokens: res.usage.input_tokens,
               outputTokens: res.usage.output_tokens,
+              cacheReadTokens: res.usage.cache_read_tokens,
+              cacheCreationTokens: res.usage.cache_creation_tokens,
               label: 'gateway.chat',
             });
           } else {
@@ -2918,9 +2923,9 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   const supportsCache = recipe.touchpoints.chat?.supports_prompt_cache === true;
   const useCache = !!opts.cacheSystem && supportsCache;
 
-  // Build messages. Anthropic prompt-cache markers ride on system + last tool
-  // via providerOptions; the AI SDK accepts the system as a string for
-  // generateText, so cache markers go through providerOptions.anthropic.
+  // Build messages. Prompt-cache hints are provider-specific: Anthropic uses
+  // providerOptions cacheControl markers; Codex Responses gets a stable
+  // prompt_cache_key below when cacheSystem is enabled.
   const tools = (opts.tools ?? []).reduce((acc, t) => {
     acc[t.name] = {
       description: t.description,
@@ -2940,7 +2945,13 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   }
 
   let _budgetRecorded = false;
-  const _recordBudget = (modelLabel: string, inputTokens: number, outputTokens: number): void => {
+  const _recordBudget = (
+    modelLabel: string,
+    inputTokens: number,
+    outputTokens: number,
+    cacheReadTokens = 0,
+    cacheCreationTokens = 0,
+  ): void => {
     if (!tracker || _budgetRecorded) return;
     _budgetRecorded = true;
     try {
@@ -2948,6 +2959,8 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
         modelId: modelLabel,
         inputTokens,
         outputTokens,
+        cacheReadTokens,
+        cacheCreationTokens,
         label: 'gateway.chat',
       });
     } catch {
@@ -2985,6 +2998,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
           model: modelId,
           profileModel: displayModelId,
           runtime: codexRuntime,
+          promptCacheKey: useCache ? opts.promptCacheKey : undefined,
           maxOutputTokens,
           signal: withDefaultTimeout(opts.abortSignal, AI_CHAT_TIMEOUT_MS),
         },
@@ -2993,7 +3007,13 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
         tools: opts.tools,
       });
 
-      _recordBudget(`${recipe.id}:${displayModelId}`, result.usage.input_tokens, result.usage.output_tokens);
+      _recordBudget(
+        `${recipe.id}:${displayModelId}`,
+        result.usage.input_tokens,
+        result.usage.output_tokens,
+        result.usage.cache_read_tokens,
+        result.usage.cache_creation_tokens,
+      );
       return result;
     } catch (err) {
       const fallback = _extractUsageFromError(err, {
@@ -3055,7 +3075,9 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
 
     const inTok = Number(usage.inputTokens ?? usage.promptTokens ?? 0);
     const outTok = Number(usage.outputTokens ?? usage.completionTokens ?? 0);
-    _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok);
+    const cacheReadTokens = Number(anthropicCache.cacheReadInputTokens ?? anthropicCache.cache_read_input_tokens ?? 0);
+    const cacheCreationTokens = Number(anthropicCache.cacheCreationInputTokens ?? anthropicCache.cache_creation_input_tokens ?? 0);
+    _recordBudget(`${recipe.id}:${modelId}`, inTok, outTok, cacheReadTokens, cacheCreationTokens);
 
     return {
       text: blocks.filter(b => b.type === 'text').map(b => (b as { type: 'text'; text: string }).text).join(''),
@@ -3064,8 +3086,8 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       usage: {
         input_tokens: inTok,
         output_tokens: outTok,
-        cache_read_tokens: Number(anthropicCache.cacheReadInputTokens ?? anthropicCache.cache_read_input_tokens ?? 0),
-        cache_creation_tokens: Number(anthropicCache.cacheCreationInputTokens ?? anthropicCache.cache_creation_input_tokens ?? 0),
+        cache_read_tokens: cacheReadTokens,
+        cache_creation_tokens: cacheCreationTokens,
       },
       model: `${recipe.id}:${modelId}`,
       providerId: recipe.id,
@@ -3130,8 +3152,10 @@ export interface ToolLoopOpts {
   /** Per-turn max output tokens. Default 4096. */
   maxTokens?: number;
   abortSignal?: AbortSignal;
-  /** Apply Anthropic cache_control to system + last tool. Silently ignored elsewhere. */
+  /** Apply provider prompt-cache hints when supported (Anthropic markers, Codex prompt_cache_key). */
   cacheSystem?: boolean;
+  /** Stable prompt-cache routing key shared by all turns in this loop. */
+  promptCacheKey?: string;
 
   /** Crash-replay state. When set, the loop resumes from the recorded position. */
   replayState?: ToolLoopReplayState;
@@ -3255,6 +3279,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         maxTokens,
         abortSignal: opts.abortSignal,
         cacheSystem: opts.cacheSystem,
+        promptCacheKey: opts.promptCacheKey,
       });
     } catch (err) {
       opts.onHeartbeat?.('llm_call_failed', {

@@ -138,6 +138,8 @@ describe('gateway.toolLoop Codex Responses transport', () => {
       initialMessages: [{ role: 'user', content: 'Look up codex replay safety.' }],
       tools: [lookupTool],
       toolHandlers: new Map([['lookup_brain', handler]]),
+      cacheSystem: true,
+      promptCacheKey: 'gbrain-subagent-123',
     });
 
     expect(result.stopReason).toBe('end');
@@ -158,11 +160,13 @@ describe('gateway.toolLoop Codex Responses transport', () => {
     expect(firstBody.model).toBe('gpt-5.5');
     expect(firstBody.reasoning).toEqual({ effort: 'medium', summary: 'auto' });
     expect(firstBody.service_tier).toBe('priority');
+    expect(firstBody.prompt_cache_key).toBe('gbrain-subagent-123');
     expect(firstBody.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Look up codex replay safety.' }] },
     ]);
 
     const secondBody = requestBody(calls[1]);
+    expect(secondBody.prompt_cache_key).toBe('gbrain-subagent-123');
     expect(secondBody.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Look up codex replay safety.' }] },
       {
