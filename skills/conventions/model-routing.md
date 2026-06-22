@@ -42,15 +42,30 @@ gbrain config set models.tier.deep opus
 gbrain config set models.aliases.frontier anthropic:claude-opus-4-7
 gbrain config set models.default frontier
 
-# Route non-embedding LLM work through Codex, while OpenAI remains embeddings-only
-gbrain config set models.chat codex:gpt-5.5
-gbrain config set models.expansion codex:gpt-5.5
+# Route non-embedding LLM work through Codex profiles, while OpenAI remains embeddings-only
+# Cheap/fast default chat and text expansion:
+gbrain config set models.chat codex:gpt-5.5-medium-fast
+gbrain config set models.expansion codex:gpt-5.5-medium-fast
+# Deeper synthesis:
+gbrain config set models.think codex:gpt-5.5-xhigh-fast
+gbrain config set models.tier.deep codex:gpt-5.5-xhigh-fast
+# Gateway-native subagent/autonomous loops:
+gbrain config set models.subagent codex:gpt-5.5-medium-fast
+gbrain config set models.tier.subagent codex:gpt-5.5-medium-fast
+gbrain config set agent.use_gateway_loop true
 # Leave embedding_model pointed at OpenAI, e.g. openai:text-embedding-3-large.
 ```
 
+`models.chat` and `models.expansion` alone do not route all non-embedding LLM
+work. Think/deep, subagent, dream/autopilot, facts extraction, and eval flows
+have separate model keys or tiers. Use `gbrain models` to inspect each surface.
+
 ### Codex safe routing
 
-- Provider id: `codex`; example model: `codex:gpt-5.5`.
+- Provider id: `codex`; example profiles: `codex:gpt-5.5-medium-fast` and
+  `codex:gpt-5.5-xhigh-fast`.
+- Profile slugs are GBrain runtime profiles, not raw provider model IDs; the
+  gateway sends the base model plus typed Codex options.
 - Auth envs: `GBRAIN_CODEX_ACCESS_TOKEN` preferred, `CODEX_ACCESS_TOKEN`
   fallback, `GBRAIN_CODEX_BASE_URL` optional.
 - Codex uses the dedicated `codex-responses` transport; it is not
@@ -65,8 +80,9 @@ gbrain config set models.expansion codex:gpt-5.5
 - Codex currently has `supports_prompt_cache:false`. Even though replay tests
   approve it for tool-loop/subagent routing, model routing may warn about
   degraded prompt-caching/cost semantics.
-- `models.expansion = codex:gpt-5.5` is for text query expansion only. Image
-  OCR still needs a multimodal expansion model/provider and safely skips Codex.
+- Codex expansion profiles such as `models.expansion = codex:gpt-5.5-medium-fast`
+  are for text query expansion only. Image OCR still needs a multimodal
+  expansion model/provider and safely skips Codex.
 
 Visibility:
 
@@ -77,9 +93,10 @@ gbrain models doctor             # 1-token probe to each configured model
 
 **Subagent tier exists because the loop is provider-capability-gated.** The
 handler needs multi-turn tool calls that replay cleanly. Anthropic remains the
-default and uses prompt caching on system + tools. Codex (`codex:gpt-5.5`) is
-also approved for tool-loop/subagent routing after replay tests, but currently
-has `supports_prompt_cache:false`, so cost/prompt-cache warnings are expected.
+default and uses prompt caching on system + tools. Codex profiles such as
+`codex:gpt-5.5-medium-fast` are also approved for tool-loop/subagent routing
+after replay tests, but currently have `supports_prompt_cache:false`, so
+cost/prompt-cache warnings are expected.
 Providers without `supports_subagent_loop` are refused or rerouted by the same
 enforcement layers: submit-time guard in `MinionQueue.add`, tier-resolution
 fallback in `resolveModel`, doctor `subagent_provider` check.

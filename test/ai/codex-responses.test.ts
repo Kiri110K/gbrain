@@ -7,6 +7,7 @@ import {
   toCodexTools,
   type CodexResponsesConfig,
 } from '../../src/core/ai/codex-responses.ts';
+import { resolveCodexProfile } from '../../src/core/ai/codex-profiles.ts';
 import { AIConfigError, AITransientError } from '../../src/core/ai/errors.ts';
 import type { ChatMessage, ChatToolDef } from '../../src/core/ai/gateway.ts';
 import { withEnv } from '../helpers/with-env.ts';
@@ -395,6 +396,42 @@ describe('codexChat HTTP transport', () => {
       expect(body.tools).toEqual(toCodexTools(tools));
       expect(body.tool_choice).toBe('auto');
       expect(body.parallel_tool_calls).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test('runtime profile options are lowered into the request body', async () => {
+    const { calls, restore } = installJsonResponseFetch(codexTextResponse());
+    const profile = resolveCodexProfile('gpt-5.5-xhigh-fast');
+    const tools: ChatToolDef[] = [
+      {
+        name: 'lookup',
+        description: 'Lookup a thing.',
+        inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+      },
+    ];
+
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg({
+          model: profile.providerModelId,
+          profileModel: profile.displayModelId,
+          runtime: profile.runtime,
+        }),
+        messages: [{ role: 'user', content: 'Use a fast deep profile.' }],
+        tools,
+      });
+
+      const body = parseRequestBody(calls[0]);
+      expect(body.model).toBe('gpt-5.5');
+      expect(body.store).toBe(false);
+      expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+      expect(body.service_tier).toBe('priority');
+      expect(body.tool_choice).toBe('auto');
+      expect(body.parallel_tool_calls).toBe(true);
+      expect(result.model).toBe('codex:gpt-5.5-xhigh-fast');
+      expect(result.providerMetadata?.codex).toMatchObject({ profileModel: 'gpt-5.5-xhigh-fast' });
     } finally {
       restore();
     }

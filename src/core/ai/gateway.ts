@@ -54,6 +54,7 @@ import { hasAnthropicKey } from './anthropic-key.ts';
 import { AIConfigError, AITransientError, normalizeAIError } from './errors.ts';
 import { runGuardrails, hasGuardrails, type GuardrailHook } from '../guardrails.ts';
 import { codexChat, redactCodexSecrets } from './codex-responses.ts';
+import { resolveCodexProfile, type CodexRuntimeOptions } from './codex-profiles.ts';
 
 // ---- Gateway-wide AI-HTTP timeout (v0.42.20.0, #1762/#1775) ----
 //
@@ -145,12 +146,15 @@ function registerExtendedModel(modelStr: string): void {
   if (!modelStr) return;
   try {
     const { providerId, modelId } = parseModelId(modelStr);
+    const registeredModelId = providerId === 'codex'
+      ? resolveCodexProfile(modelId).providerModelId
+      : modelId;
     let set = _extendedModels.get(providerId);
     if (!set) {
       set = new Set();
       _extendedModels.set(providerId, set);
     }
-    set.add(modelId);
+    set.add(registeredModelId);
   } catch {
     // Malformed model strings will fail at parseModelId — ignore here;
     // the actual chat/embed call will surface the error.
@@ -2132,22 +2136,37 @@ export async function embedMultimodalSafe(
 
 // ---- Expansion ----
 
-async function resolveExpansionProvider(modelStr: string): Promise<{ model: any; recipe: Recipe; modelId: string }> {
+async function resolveExpansionProvider(modelStr: string): Promise<{
+  model: any;
+  recipe: Recipe;
+  modelId: string;
+  displayModelId: string;
+  codexRuntime?: CodexRuntimeOptions;
+}> {
   const { parsed, recipe } = resolveRecipe(modelStr);
-  assertTouchpoint(recipe, 'expansion', parsed.modelId, getExtendedModelsForProvider(parsed.providerId));
+  let providerModelId = parsed.modelId;
+  let displayModelId = parsed.modelId;
+  let codexRuntime: CodexRuntimeOptions | undefined;
+  if (recipe.implementation === 'codex-responses') {
+    const profile = resolveCodexProfile(parsed.modelId);
+    providerModelId = profile.providerModelId;
+    displayModelId = profile.displayModelId;
+    codexRuntime = profile.runtime;
+  }
+  assertTouchpoint(recipe, 'expansion', providerModelId, getExtendedModelsForProvider(parsed.providerId));
   const cfg = requireConfig();
 
   if (recipe.implementation === 'codex-responses') {
-    return { model: null, recipe, modelId: parsed.modelId };
+    return { model: null, recipe, modelId: providerModelId, displayModelId, codexRuntime };
   }
 
-  const cacheKey = `exp:${recipe.id}:${parsed.modelId}:${cfg.base_urls?.[recipe.id] ?? ''}`;
+  const cacheKey = `exp:${recipe.id}:${providerModelId}:${cfg.base_urls?.[recipe.id] ?? ''}`;
   const cached = _modelCache.get(cacheKey);
-  if (cached) return { model: cached, recipe, modelId: parsed.modelId };
+  if (cached) return { model: cached, recipe, modelId: providerModelId, displayModelId };
 
-  const model = instantiateExpansion(recipe, parsed.modelId, cfg);
+  const model = instantiateExpansion(recipe, providerModelId, cfg);
   _modelCache.set(cacheKey, model);
-  return { model, recipe, modelId: parsed.modelId };
+  return { model, recipe, modelId: providerModelId, displayModelId };
 }
 
 function instantiateExpansion(recipe: Recipe, modelId: string, cfg: AIGatewayConfig): any {
@@ -2273,6 +2292,8 @@ async function expandWithCodexResponses(
   query: string,
   recipe: Recipe,
   modelId: string,
+  displayModelId: string,
+  runtime: CodexRuntimeOptions | undefined,
 ): Promise<string[]> {
   const cfg = requireConfig();
   const accessToken = resolveCodexAccessToken(recipe, cfg, 'expansion');
@@ -2283,6 +2304,8 @@ async function expandWithCodexResponses(
       baseURL,
       accessToken,
       model: modelId,
+      profileModel: displayModelId,
+      runtime,
       signal: withDefaultTimeout(undefined, AI_CHAT_TIMEOUT_MS),
     },
     messages: [{ role: 'user', content: codexExpansionPrompt(query) }],
@@ -2322,9 +2345,9 @@ export async function expand(query: string): Promise<string[]> {
   });
 
   try {
-    const { model, recipe, modelId } = await resolveExpansionProvider(expansionModel);
+    const { model, recipe, modelId, displayModelId, codexRuntime } = await resolveExpansionProvider(expansionModel);
     if (recipe.implementation === 'codex-responses') {
-      return await expandWithCodexResponses(query, recipe, modelId);
+      return await expandWithCodexResponses(query, recipe, modelId, displayModelId, codexRuntime);
     }
 
     const result = await generateObject({
@@ -2589,7 +2612,10 @@ export function validateModelId(modelStr: string): ModelIdValidity {
     throw e;
   }
   try {
-    assertTouchpoint(recipe, 'chat', parsed.modelId, getExtendedModelsForProvider(parsed.providerId));
+    const providerModelId = recipe.implementation === 'codex-responses'
+      ? resolveCodexProfile(parsed.modelId).providerModelId
+      : parsed.modelId;
+    assertTouchpoint(recipe, 'chat', providerModelId, getExtendedModelsForProvider(parsed.providerId));
   } catch (e) {
     if (e instanceof AIConfigError) return { ok: false, reason: 'unknown_model', detail: e.message, fix: e.fix };
     throw e;
@@ -2630,22 +2656,37 @@ export function probeChatModel(modelStr: string): ChatModelProbe {
   return { ok: true };
 }
 
-async function resolveChatProvider(modelStr: string): Promise<{ model: any; recipe: Recipe; modelId: string }> {
+async function resolveChatProvider(modelStr: string): Promise<{
+  model: any;
+  recipe: Recipe;
+  modelId: string;
+  displayModelId: string;
+  codexRuntime?: CodexRuntimeOptions;
+}> {
   const { parsed, recipe } = resolveRecipe(modelStr);
-  assertTouchpoint(recipe, 'chat', parsed.modelId, getExtendedModelsForProvider(parsed.providerId));
+  let providerModelId = parsed.modelId;
+  let displayModelId = parsed.modelId;
+  let codexRuntime: CodexRuntimeOptions | undefined;
+  if (recipe.implementation === 'codex-responses') {
+    const profile = resolveCodexProfile(parsed.modelId);
+    providerModelId = profile.providerModelId;
+    displayModelId = profile.displayModelId;
+    codexRuntime = profile.runtime;
+  }
+  assertTouchpoint(recipe, 'chat', providerModelId, getExtendedModelsForProvider(parsed.providerId));
   const cfg = requireConfig();
 
   if (recipe.implementation === 'codex-responses') {
-    return { model: null, recipe, modelId: parsed.modelId };
+    return { model: null, recipe, modelId: providerModelId, displayModelId, codexRuntime };
   }
 
-  const cacheKey = `chat:${recipe.id}:${parsed.modelId}:${cfg.base_urls?.[recipe.id] ?? ''}`;
+  const cacheKey = `chat:${recipe.id}:${providerModelId}:${cfg.base_urls?.[recipe.id] ?? ''}`;
   const cached = _modelCache.get(cacheKey);
-  if (cached) return { model: cached, recipe, modelId: parsed.modelId };
+  if (cached) return { model: cached, recipe, modelId: providerModelId, displayModelId };
 
-  const model = instantiateChat(recipe, parsed.modelId, cfg);
+  const model = instantiateChat(recipe, providerModelId, cfg);
   _modelCache.set(cacheKey, model);
-  return { model, recipe, modelId: parsed.modelId };
+  return { model, recipe, modelId: providerModelId, displayModelId };
 }
 
 function instantiateChat(recipe: Recipe, modelId: string, cfg: AIGatewayConfig): any {
@@ -2872,7 +2913,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   }
 
   const modelStr = modelStrEarly;
-  const { model, recipe, modelId } = await resolveChatProvider(modelStr);
+  const { model, recipe, modelId, displayModelId, codexRuntime } = await resolveChatProvider(modelStr);
 
   const supportsCache = recipe.touchpoints.chat?.supports_prompt_cache === true;
   const useCache = !!opts.cacheSystem && supportsCache;
@@ -2942,6 +2983,8 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
           baseURL,
           accessToken: apiKey,
           model: modelId,
+          profileModel: displayModelId,
+          runtime: codexRuntime,
           maxOutputTokens,
           signal: withDefaultTimeout(opts.abortSignal, AI_CHAT_TIMEOUT_MS),
         },
@@ -2950,15 +2993,15 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
         tools: opts.tools,
       });
 
-      _recordBudget(`${recipe.id}:${modelId}`, result.usage.input_tokens, result.usage.output_tokens);
+      _recordBudget(`${recipe.id}:${displayModelId}`, result.usage.input_tokens, result.usage.output_tokens);
       return result;
     } catch (err) {
       const fallback = _extractUsageFromError(err, {
         inputTokens: estimatedInputTokens,
         outputTokens: maxOutputTokens,
       });
-      _recordBudget(`${recipe.id}:${modelId}`, fallback.inputTokens, fallback.outputTokens);
-      throw normalizeAIError(err, `chat(${recipe.id}:${modelId})`);
+      _recordBudget(`${recipe.id}:${displayModelId}`, fallback.inputTokens, fallback.outputTokens);
+      throw normalizeAIError(err, `chat(${recipe.id}:${displayModelId})`);
     }
   }
 

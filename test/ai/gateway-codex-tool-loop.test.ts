@@ -101,7 +101,7 @@ beforeEach(() => {
     });
   }) as typeof fetch;
   configureGateway({
-    chat_model: 'codex:gpt-5.5',
+    chat_model: 'codex:gpt-5.5-medium-fast',
     env: { GBRAIN_CODEX_ACCESS_TOKEN: CODEX_TOKEN },
   });
 });
@@ -156,6 +156,8 @@ describe('gateway.toolLoop Codex Responses transport', () => {
 
     const firstBody = requestBody(calls[0]);
     expect(firstBody.model).toBe('gpt-5.5');
+    expect(firstBody.reasoning).toEqual({ effort: 'medium', summary: 'auto' });
+    expect(firstBody.service_tier).toBe('priority');
     expect(firstBody.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Look up codex replay safety.' }] },
     ]);

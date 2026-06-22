@@ -130,6 +130,24 @@ describe('gateway.expand Codex Responses routing', () => {
     expect(prompt).toContain('Query: foo');
   });
 
+  test('scoped expansion profile sends base model plus runtime options', async () => {
+    configureGateway({
+      expansion_model: 'codex:gpt-5.5-medium-fast',
+      env: { GBRAIN_CODEX_ACCESS_TOKEN: CODEX_TOKEN },
+    });
+
+    await expect(expand('profile expansion')).resolves.toContain('bar baz');
+
+    const body = bodyOf(calls[0]);
+    expect(body.model).toBe('gpt-5.5');
+    expect(body.reasoning).toEqual({ effort: 'medium', summary: 'auto' });
+    expect(body.store).toBe(false);
+    expect(body.service_tier).toBe('priority');
+    expect(body.tools).toBeUndefined();
+    expect(body.tool_choice).toBeUndefined();
+    expect(body.parallel_tool_calls).toBeUndefined();
+  });
+
   test('ignores OPENAI_API_KEY and uses the Codex token for Codex expansion', async () => {
     configureGateway({
       expansion_model: 'codex:gpt-5.5',

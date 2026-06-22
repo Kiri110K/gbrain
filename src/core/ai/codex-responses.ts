@@ -1,5 +1,10 @@
 import { AIConfigError, AITransientError } from './errors.ts';
 import type { ChatBlock, ChatMessage, ChatResult, ChatToolDef } from './gateway.ts';
+import {
+  DEFAULT_CODEX_RUNTIME,
+  toCodexWireRuntimeOptions,
+  type CodexRuntimeOptions,
+} from './codex-profiles.ts';
 
 type JsonRecord = Record<string, unknown>;
 type CodexTextPart = { type: 'input_text' | 'output_text'; text: string };
@@ -7,7 +12,11 @@ type CodexTextPart = { type: 'input_text' | 'output_text'; text: string };
 export interface CodexResponsesConfig {
   baseURL: string;
   accessToken: string;
+  /** Raw provider model id sent to Codex Responses. */
   model: string;
+  /** Optional GBrain profile slug preserved in ChatResult/budget labels. */
+  profileModel?: string;
+  runtime?: CodexRuntimeOptions;
   maxOutputTokens?: number;
   signal?: AbortSignal;
 }
@@ -258,6 +267,7 @@ export function normalizeCodexResponse(input: {
   response: unknown;
   providerId: string;
   modelId: string;
+  providerModelId?: string;
 }): ChatResult {
   const response = isRecord(input.response) ? input.response : undefined;
   const blocks: ChatBlock[] = [];
@@ -273,6 +283,14 @@ export function normalizeCodexResponse(input: {
     .map((block) => block.text)
     .join('');
   const hasToolCalls = blocks.some((block) => block.type === 'tool-call');
+  const providerMetadata = input.providerModelId && input.providerModelId !== input.modelId
+    ? {
+        codex: {
+          providerModel: input.providerModelId,
+          profileModel: input.modelId,
+        },
+      }
+    : undefined;
 
   return {
     text,
@@ -281,6 +299,7 @@ export function normalizeCodexResponse(input: {
     usage: normalizeUsage(response),
     model: `${input.providerId}:${input.modelId}`,
     providerId: input.providerId,
+    ...(providerMetadata ? { providerMetadata } : {}),
   };
 }
 
@@ -329,11 +348,16 @@ function buildCodexRequestBody(input: {
   messages: ChatMessage[];
   tools?: ChatToolDef[];
 }): JsonRecord {
+  const runtime = input.cfg.runtime ?? DEFAULT_CODEX_RUNTIME;
+  const {
+    tool_choice: codexToolChoice,
+    parallel_tool_calls: codexParallelToolCalls,
+    ...wireRuntime
+  } = toCodexWireRuntimeOptions(runtime);
   const body: JsonRecord = {
     model: input.cfg.model,
     input: toCodexInput(input.messages),
-    store: false,
-    reasoning: { effort: 'medium', summary: 'auto' },
+    ...wireRuntime,
   };
 
   if (input.system && input.system.trim().length > 0) {
@@ -343,8 +367,8 @@ function buildCodexRequestBody(input: {
   const tools = toCodexTools(input.tools);
   if (tools && tools.length > 0) {
     body.tools = tools;
-    body.tool_choice = 'auto';
-    body.parallel_tool_calls = true;
+    body.tool_choice = codexToolChoice;
+    body.parallel_tool_calls = codexParallelToolCalls;
   }
 
   if (Number.isFinite(input.cfg.maxOutputTokens) && Number(input.cfg.maxOutputTokens) > 0) {
@@ -409,7 +433,8 @@ export async function codexChat(input: {
 
   return normalizeCodexResponse({
     providerId: 'codex',
-    modelId: cfg.model,
+    modelId: cfg.profileModel ?? cfg.model,
+    providerModelId: cfg.model,
     response: parsed,
   });
 }

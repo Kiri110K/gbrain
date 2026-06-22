@@ -1,14 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { getRecipe, listRecipes } from '../../src/core/ai/recipes/index.ts';
 import { classifyCapabilities } from '../../src/core/ai/capabilities.ts';
+import { CODEX_BASE_MODELS } from '../../src/core/ai/codex-profiles.ts';
 
-const CODEX_CHAT_MODELS = [
-  'gpt-5.5',
-  'gpt-5.4',
-  'gpt-5.4-mini',
-  'gpt-5.3-codex',
-  'gpt-5.3-codex-spark',
-];
+const CODEX_CHAT_MODELS = [...CODEX_BASE_MODELS];
 
 describe('recipe: codex', () => {
   test('registered with codex-responses chat and expansion surfaces', () => {
@@ -18,6 +13,8 @@ describe('recipe: codex', () => {
     expect(r?.implementation).toBe('codex-responses');
     expect(r?.touchpoints.expansion?.models).toEqual(CODEX_CHAT_MODELS);
     expect(r?.touchpoints.chat?.models).toEqual(CODEX_CHAT_MODELS);
+    expect(r?.touchpoints.chat?.models).toContain('gpt-5.5');
+    expect(r?.touchpoints.chat?.models).not.toContain('gpt-5.5-xhigh-fast');
     expect(r?.touchpoints.embedding).toBeUndefined();
     expect(r?.touchpoints.reranker).toBeUndefined();
   });

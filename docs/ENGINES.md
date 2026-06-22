@@ -108,7 +108,11 @@ above `BrainEngine`. Codex is intentionally separate from OpenAI-compatible
 providers:
 
 - Provider id: `codex`.
-- Example model string: `codex:gpt-5.5`.
+- Example profile strings: `codex:gpt-5.5-medium-fast` and
+  `codex:gpt-5.5-xhigh-fast`.
+- Profile slugs are GBrain runtime profiles, not raw provider model IDs: the
+  gateway sends base model `gpt-5.5` plus typed Codex options for reasoning,
+  service tier, storage, tool choice, and parallel tool calls.
 - Transport: dedicated `codex-responses`, not OpenAI-compatible.
 - Auth envs: `GBRAIN_CODEX_ACCESS_TOKEN` preferred, `CODEX_ACCESS_TOKEN`
   fallback, `GBRAIN_CODEX_BASE_URL` optional.
@@ -121,10 +125,25 @@ Safe routing recipe when you want Codex for non-embedding LLM work while keeping
 OpenAI embeddings:
 
 ```bash
-gbrain config set models.chat codex:gpt-5.5
-gbrain config set models.expansion codex:gpt-5.5
+# Cheap/fast default chat and text expansion.
+gbrain config set models.chat codex:gpt-5.5-medium-fast
+gbrain config set models.expansion codex:gpt-5.5-medium-fast
+
+# Deeper synthesis routes need their own keys/tiers.
+gbrain config set models.think codex:gpt-5.5-xhigh-fast
+gbrain config set models.tier.deep codex:gpt-5.5-xhigh-fast
+
+# Gateway-native subagent/autonomous loops.
+gbrain config set models.subagent codex:gpt-5.5-medium-fast
+gbrain config set models.tier.subagent codex:gpt-5.5-medium-fast
+gbrain config set agent.use_gateway_loop true
+
 # Leave embedding_model pointed at OpenAI, e.g. openai:text-embedding-3-large.
 ```
+
+`models.chat` and `models.expansion` alone do not route all non-embedding LLM
+work. Think/deep, subagent, dream/autopilot, facts extraction, and eval flows
+have separate model keys or tiers. Use `gbrain models` to inspect each surface.
 
 Secret hygiene: never paste token values into docs, shell history examples,
 logs, issue reports, or screenshots. Use placeholders such as
@@ -134,7 +153,8 @@ can expire; refresh/auth-store reuse is future/opt-in behavior, not automatic.
 Capability caveats: Codex is approved for tool-loop/subagent routing after
 replay tests, but GBrain does not currently implement Codex prompt-cache support
 (`supports_prompt_cache:false`). Model routing may warn about degraded prompt
-caching or cost semantics. `models.expansion = codex:gpt-5.5` is for text query
+caching or cost semantics. Codex expansion profiles such as
+`models.expansion = codex:gpt-5.5-medium-fast` are for text query
 expansion only; image OCR still needs a multimodal expansion model/provider and
 skips Codex rather than treating it as OCR-capable.
 

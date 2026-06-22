@@ -25,6 +25,7 @@
 
 import { resolveRecipe } from './model-resolver.ts';
 import { AIConfigError } from './errors.ts';
+import { resolveCodexProfile } from './codex-profiles.ts';
 
 export interface ProviderCapabilities {
   /** Provider returns native function/tool calling. Required, but not sufficient, for the subagent loop. */
@@ -98,6 +99,14 @@ export function getProviderCapabilities(modelString: string): ProviderCapabiliti
   // boundary; this function returns capabilities for whatever the user asked
   // for, on the assumption it'll be validated elsewhere.
 
+  // Codex profile slugs are user-facing runtime profiles. Validate and lower
+  // them to their base provider model here so invalid suffixes fail the same
+  // way they fail at the gateway boundary, while valid profiles inherit the
+  // base model's recipe capabilities.
+  if (recipe.implementation === 'codex-responses') {
+    resolveCodexProfile(parsed.modelId);
+  }
+
   return {
     supportsToolCalling: chat.supports_tools === true,
     supportsSubagentLoop: chat.supports_subagent_loop === true,
@@ -112,11 +121,6 @@ export function getProviderCapabilities(modelString: string): ProviderCapabiliti
     supportsThinking: false,
     maxContext: chat.max_context_tokens ?? 128_000,
   };
-
-  // The `parsed` binding is intentionally unused — `resolveRecipe` is called
-  // here for its validation side-effects (throws on unknown provider). Keeping
-  // the destructure makes future per-model capability overrides cheap.
-  void parsed;
 }
 
 /**

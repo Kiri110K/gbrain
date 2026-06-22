@@ -127,6 +127,52 @@ describe('gateway.chat Codex routing', () => {
     ]);
   });
 
+  test('scoped Codex profile sends base model plus runtime options and preserves display id', async () => {
+    configureGateway({
+      chat_model: 'codex:gpt-5.5-xhigh-fast',
+      env: { GBRAIN_CODEX_ACCESS_TOKEN: CODEX_TOKEN },
+    });
+
+    const result = await chat({
+      messages: [{ role: 'user', content: 'Use scoped profile.' }],
+      tools: [
+        {
+          name: 'lookup',
+          description: 'Lookup a thing.',
+          inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+        },
+      ],
+    });
+
+    expect(result.model).toBe('codex:gpt-5.5-xhigh-fast');
+    expect(result.providerMetadata?.codex).toMatchObject({
+      providerModel: 'gpt-5.5',
+      profileModel: 'gpt-5.5-xhigh-fast',
+    });
+
+    const body = bodyOf(calls[0]);
+    expect(body.model).toBe('gpt-5.5');
+    expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+    expect(body.store).toBe(false);
+    expect(body.service_tier).toBe('priority');
+    expect(body.tool_choice).toBe('auto');
+    expect(body.parallel_tool_calls).toBe(true);
+  });
+
+  test('invalid scoped Codex profile suffix fails before any network call', async () => {
+    configureGateway({
+      chat_model: 'codex:gpt-5.5-ultra-fast',
+      env: { GBRAIN_CODEX_ACCESS_TOKEN: CODEX_TOKEN },
+    });
+
+    const err = await expectRejectsConfigError(
+      chat({ messages: [{ role: 'user', content: 'Bad profile.' }] }),
+    );
+
+    expect(err.message).toContain('Unknown Codex profile');
+    expect(calls).toHaveLength(0);
+  });
+
   test('uses the Codex token and ignores OPENAI_API_KEY for Codex chat', async () => {
     configureGateway({
       chat_model: 'codex:gpt-5.5',

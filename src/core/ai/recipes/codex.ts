@@ -1,13 +1,6 @@
 import type { Recipe } from '../types.ts';
 import { AIConfigError } from '../errors.ts';
-
-const CODEX_CHAT_MODELS = [
-  'gpt-5.5',
-  'gpt-5.4',
-  'gpt-5.4-mini',
-  'gpt-5.3-codex',
-  'gpt-5.3-codex-spark',
-];
+import { CODEX_BASE_MODELS } from '../codex-profiles.ts';
 
 /**
  * OpenAI Codex / ChatGPT OAuth backend.
@@ -30,10 +23,10 @@ export const codex: Recipe = {
   },
   touchpoints: {
     expansion: {
-      models: CODEX_CHAT_MODELS,
+      models: [...CODEX_BASE_MODELS],
     },
     chat: {
-      models: CODEX_CHAT_MODELS,
+      models: [...CODEX_BASE_MODELS],
       supports_tools: true,
       supports_subagent_loop: true,
       supports_prompt_cache: false,

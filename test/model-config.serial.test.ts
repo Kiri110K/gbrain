@@ -213,6 +213,44 @@ describe('resolveModel — v0.31.12 tier system', () => {
     expect(stderrCapture).not.toContain('falling back');
   });
 
+  test('tier.subagent accepts Codex scoped profiles once supports_subagent_loop is approved (with cost warn)', async () => {
+    stub.set('models.tier.subagent', 'codex:gpt-5.5-medium-fast');
+    const m = await resolveModel(stub as never, {
+      tier: 'subagent',
+      fallback: 'sonnet',
+    });
+    expect(m).toBe('codex:gpt-5.5-medium-fast');
+    expect(stderrCapture).toContain('provider does not support prompt caching');
+    expect(stderrCapture).not.toContain('falling back');
+  });
+
+  test('tier.subagent rejects invalid Codex profile suffixes (falls back to default)', async () => {
+    stub.set('models.tier.subagent', 'codex:gpt-5.5-ultra-fast');
+    const m = await resolveModel(stub as never, {
+      tier: 'subagent',
+      fallback: 'sonnet',
+    });
+    expect(m).toBe(TIER_DEFAULTS.subagent);
+    expect(stderrCapture).toContain('tier.subagent');
+  });
+
+  test('per-task Codex scoped profile config resolves unchanged for chat and think', async () => {
+    stub.set('models.chat', 'codex:gpt-5.5-medium-fast');
+    stub.set('models.think', 'codex:gpt-5.5-xhigh-fast');
+
+    await expect(resolveModel(stub as never, {
+      configKey: 'models.chat',
+      tier: 'reasoning',
+      fallback: 'sonnet',
+    })).resolves.toBe('codex:gpt-5.5-medium-fast');
+
+    await expect(resolveModel(stub as never, {
+      configKey: 'models.think',
+      tier: 'deep',
+      fallback: 'opus',
+    })).resolves.toBe('codex:gpt-5.5-xhigh-fast');
+  });
+
   test('tier.subagent accepts explicit Anthropic override', async () => {
     stub.set('models.tier.subagent', 'anthropic:claude-opus-4-7');
     const m = await resolveModel(stub as never, {

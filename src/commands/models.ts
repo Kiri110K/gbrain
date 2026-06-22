@@ -151,6 +151,9 @@ function formatText(report: ModelsReport): string {
     }
   }
   lines.push('');
+  lines.push('Codex profiles: slugs like `codex:gpt-5.5-medium-fast` are GBrain runtime profiles; the gateway sends the base Codex model plus typed runtime options, not the slug as a raw provider model id.');
+  lines.push('Routing note: `models.chat` and `models.expansion` do not cover every LLM surface; check think/deep, subagent, dream/autopilot, facts, and eval rows separately.');
+  lines.push('');
   lines.push('Tip: probe reachability with `gbrain models doctor` (opt-in; spends a minimal request per configured chat/embed/rerank surface).');
   return lines.join('\n');
 }

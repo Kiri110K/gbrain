@@ -35,6 +35,14 @@ describe('getProviderCapabilities (v0.38 Slice 1 — D6/D7 recipe-driven capabil
     expect(caps.maxContext).toBe(200000);
   });
 
+  it('returns capabilities for Codex scoped profiles using the base model', () => {
+    const caps = getProviderCapabilities('codex:gpt-5.5-xhigh-fast');
+    expect(caps.supportsToolCalling).toBe(true);
+    expect(caps.supportsSubagentLoop).toBe(true);
+    expect(caps.supportsPromptCaching).toBe(false);
+    expect(caps.maxContext).toBe(200000);
+  });
+
   it('honors Anthropic alias (undated → dated)', () => {
     const caps = getProviderCapabilities('anthropic:claude-haiku-4-5');
     expect(caps.supportsToolCalling).toBe(true);
@@ -71,6 +79,15 @@ describe('classifyCapabilities (D6 — three-tier capability verdict)', () => {
 
   it('returns degraded:no_caching for Codex after autonomous loop replay safety coverage', () => {
     expect(classifyCapabilities('codex:gpt-5.5')).toBe('degraded:no_caching');
+  });
+
+  it('returns degraded:no_caching for Codex scoped profiles after autonomous loop replay safety coverage', () => {
+    expect(classifyCapabilities('codex:gpt-5.5-xhigh-fast')).toBe('degraded:no_caching');
+    expect(classifyCapabilities('codex:gpt-5.5-medium-fast')).toBe('degraded:no_caching');
+  });
+
+  it('returns unknown for invalid Codex profile suffixes', () => {
+    expect(classifyCapabilities('codex:gpt-5.5-ultra-fast')).toBe('unknown');
   });
 
   it('returns unusable:no_subagent_loop for chat/tool providers not approved for autonomous loops', () => {
