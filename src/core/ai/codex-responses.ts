@@ -488,18 +488,25 @@ function buildCodexRequestBody(input: {
     parallel_tool_calls: codexParallelToolCalls,
     ...wireRuntime
   } = toCodexWireRuntimeOptions(runtime);
+  const promptCacheKey = input.cfg.promptCacheKey?.trim();
+  const wireRuntimeForRequest = promptCacheKey
+    ? Object.fromEntries(Object.entries(wireRuntime).filter(([key]) => key !== 'service_tier'))
+    : wireRuntime;
+
   const body: JsonRecord = {
     model: input.cfg.model,
     input: toCodexInput(input.messages),
     stream: true,
-    ...wireRuntime,
+    ...wireRuntimeForRequest,
   };
 
   const systemInstructions = input.system?.trim() || DEFAULT_CODEX_INSTRUCTIONS;
   body.instructions = systemInstructions;
 
-  const promptCacheKey = input.cfg.promptCacheKey?.trim();
   if (promptCacheKey) {
+    // Live Codex cache probes showed `service_tier: priority` hurts cache
+    // locality. Cache-keyed tool/subagent loops choose cache stickiness over
+    // fast-tier latency even when the profile slug includes `-fast`.
     body.prompt_cache_key = promptCacheKey;
   }
 

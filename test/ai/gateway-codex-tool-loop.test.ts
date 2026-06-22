@@ -159,7 +159,7 @@ describe('gateway.toolLoop Codex Responses transport', () => {
     const firstBody = requestBody(calls[0]);
     expect(firstBody.model).toBe('gpt-5.5');
     expect(firstBody.reasoning).toEqual({ effort: 'medium', summary: 'auto' });
-    expect(firstBody.service_tier).toBe('priority');
+    expect(firstBody.service_tier).toBeUndefined();
     expect(firstBody.prompt_cache_key).toBe('gbrain-subagent-123');
     expect(firstBody.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Look up codex replay safety.' }] },

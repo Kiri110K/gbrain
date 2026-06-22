@@ -597,12 +597,16 @@ describe('codexChat HTTP transport', () => {
     });
     try {
       const result = await codexChat({
-        cfg: baseCodexCfg({ promptCacheKey: 'gbrain-subagent-42' }),
+        cfg: baseCodexCfg({
+          promptCacheKey: 'gbrain-subagent-42',
+          runtime: resolveCodexProfile('gpt-5.5-medium-fast').runtime,
+        }),
         messages: [{ role: 'user', content: 'Use cache routing.' }],
       });
 
       const body = parseRequestBody(calls[0]);
       expect(body.prompt_cache_key).toBe('gbrain-subagent-42');
+      expect(body.service_tier).toBeUndefined();
       expect(result.usage).toEqual({
         input_tokens: 4096,
         output_tokens: 7,
