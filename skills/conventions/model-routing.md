@@ -93,14 +93,18 @@ gbrain models doctor             # 1-token probe to each configured model
 ```
 
 **Subagent tier exists because the loop is provider-capability-gated.** The
-handler needs multi-turn tool calls that replay cleanly. Anthropic remains the
+handler needs multi-turn tool calls that replay cleanly, so approved recipes
+must declare native tools plus `supports_subagent_loop`. Anthropic remains the
 default and uses prompt caching on system + tools. Codex profiles such as
 `codex:gpt-5.5-medium-fast` are also approved for tool-loop/subagent routing
 after replay tests and route prompt-cache locality through `prompt_cache_key`
-plus Codex cache headers. Providers without `supports_subagent_loop` are refused
-or rerouted by the same enforcement layers: submit-time guard in
-`MinionQueue.add`, tier-resolution fallback in `resolveModel`, doctor
-`subagent_provider` check.
+plus Codex cache headers; approved non-Anthropic models run through the
+provider-agnostic gateway loop (`gateway.toolLoop`, enabled by
+`agent.use_gateway_loop` or remote `submit_agent` jobs). Providers without
+tools or `supports_subagent_loop` are refused or rerouted by the same enforcement
+layers: submit-time capability guard in `MinionQueue.add`, tier-resolution
+fallback in `resolveModel`/`enforceSubagentCapable`, handler/gateway-loop
+defense-in-depth, and doctor `subagent_capability` check.
 
 When adding a new LLM call, route through `resolveModel()` with a tier —
 never hardcode a model string. The v0.31.6 chat default
