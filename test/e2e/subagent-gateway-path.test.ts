@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { PGLiteEngine } from '../../src/core/pglite-engine.ts';
 import { resetPgliteState } from '../helpers/reset-pglite.ts';
-import { makeSubagentHandler } from '../../src/core/minions/handlers/subagent.ts';
+import { makeSubagentHandler, RateLeaseUnavailableError } from '../../src/core/minions/handlers/subagent.ts';
 import type { MinionJobContext, ToolDef, ToolCtx } from '../../src/core/minions/types.ts';
 import {
   __setChatTransportForTests,
@@ -152,12 +152,13 @@ function makeStubTools(executions: Array<{ name: string; input: unknown; ts: num
  * code path's `new Anthropic()` at construction never fires (we route
  * through the gateway path; the legacy client is unused).
  */
-function buildHandler(toolRegistry: ToolDef[]) {
+function buildHandler(toolRegistry: ToolDef[], overrides: Partial<Parameters<typeof makeSubagentHandler>[0]> = {}) {
   return makeSubagentHandler({
     engine,
     config: {} as any,
     toolRegistry,
     makeAnthropic: () => ({ messages: { create: async () => { throw new Error('legacy path should not be invoked'); } } }) as any,
+    ...overrides,
   });
 }
 
@@ -411,6 +412,120 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
     expect(observedModel).toBe('codex:gpt-5.5-medium-fast');
     expect(result.result).toBe('codex marker path');
     expect(result.stop_reason).toBe('end_turn');
+  });
+
+  it('submit_agent gateway path holds one subagent rate lease during transport and releases it after success', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    const rateLeaseKey = 'test:gateway-subagent-success-release';
+    let activeDuringTransport: string | undefined;
+    __setChatTransportForTests(async () => {
+      const rows = await engine.executeRaw<{ count: string }>(
+        `SELECT count(*)::text AS count FROM subagent_rate_leases WHERE key = $1`,
+        [rateLeaseKey],
+      );
+      activeDuringTransport = rows[0]?.count;
+      return {
+        text: 'leased path',
+        blocks: [{ type: 'text', text: 'leased path' }] as ChatBlock[],
+        stopReason: 'end',
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: 'codex:gpt-5.5-medium-fast',
+        providerId: 'codex',
+      } satisfies ChatResult;
+    });
+
+    const tools = makeStubTools([]);
+    const handler = buildHandler(tools, { maxConcurrent: 1, rateLeaseKey });
+    const { ctx } = await makeFakeJob({
+      prompt: 'hi',
+      model: 'codex:gpt-5.5-medium-fast',
+      submitAgentGatewayLoop: true,
+    });
+
+    const result = await handler(ctx);
+    expect(result.result).toBe('leased path');
+    expect(activeDuringTransport).toBe('1');
+
+    const rows = await engine.executeRaw<{ count: string }>(
+      `SELECT count(*)::text AS count FROM subagent_rate_leases WHERE key = $1`,
+      [rateLeaseKey],
+    );
+    expect(rows[0]?.count).toBe('0');
+  });
+
+  it('submit_agent gateway path refuses before transport when the subagent rate lease cap is full', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    const rateLeaseKey = 'test:gateway-subagent-full';
+    const holder = await makeFakeJob({ prompt: 'holder', model: 'anthropic:claude-sonnet-4-6' });
+    await engine.executeRaw(
+      `INSERT INTO subagent_rate_leases (key, owner_job_id, expires_at)
+       VALUES ($1, $2, now() + interval '1 minute')`,
+      [rateLeaseKey, holder.jobId],
+    );
+
+    let transportCalls = 0;
+    __setChatTransportForTests(async () => {
+      transportCalls++;
+      return {
+        text: 'should not run',
+        blocks: [{ type: 'text', text: 'should not run' }] as ChatBlock[],
+        stopReason: 'end',
+        usage: { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: 'codex:gpt-5.5-medium-fast',
+        providerId: 'codex',
+      } satisfies ChatResult;
+    });
+
+    const tools = makeStubTools([]);
+    const handler = buildHandler(tools, { maxConcurrent: 1, rateLeaseKey });
+    const { ctx } = await makeFakeJob({
+      prompt: 'hi',
+      model: 'codex:gpt-5.5-medium-fast',
+      submitAgentGatewayLoop: true,
+    });
+
+    await expect(handler(ctx)).rejects.toBeInstanceOf(RateLeaseUnavailableError);
+    expect(transportCalls).toBe(0);
+
+    const rows = await engine.executeRaw<{ count: string }>(
+      `SELECT count(*)::text AS count FROM subagent_rate_leases WHERE key = $1`,
+      [rateLeaseKey],
+    );
+    expect(rows[0]?.count).toBe('1');
+  });
+
+  it('production Codex gateway branch preserves RateLeaseUnavailableError when the lease cap is full', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    __setChatTransportForTests(null);
+    configureGateway({
+      chat_model: 'anthropic:claude-sonnet-4-6',
+      embedding_model: 'openai:text-embedding-3-large',
+      embedding_dimensions: 1536,
+      expansion_model: 'anthropic:claude-haiku-4-5',
+      env: {
+        ANTHROPIC_API_KEY: 'stub',
+        OPENAI_API_KEY: 'stub',
+        GBRAIN_CODEX_ACCESS_TOKEN: 'codex-token',
+        GBRAIN_CODEX_BASE_URL: 'https://codex.invalid/v1',
+      },
+    });
+    const rateLeaseKey = 'test:gateway-subagent-prod-full';
+    const holder = await makeFakeJob({ prompt: 'holder', model: 'anthropic:claude-sonnet-4-6' });
+    await engine.executeRaw(
+      `INSERT INTO subagent_rate_leases (key, owner_job_id, expires_at)
+       VALUES ($1, $2, now() + interval '1 minute')`,
+      [rateLeaseKey, holder.jobId],
+    );
+
+    const tools = makeStubTools([]);
+    const handler = buildHandler(tools, { maxConcurrent: 1, rateLeaseKey });
+    const { ctx } = await makeFakeJob({
+      prompt: 'hi',
+      model: 'codex:gpt-5.5-medium-fast',
+      submitAgentGatewayLoop: true,
+    });
+
+    await expect(handler(ctx)).rejects.toBeInstanceOf(RateLeaseUnavailableError);
   });
 
   it('direct Codex subagent without submit_agent marker still fails when global gateway flag is unset', async () => {

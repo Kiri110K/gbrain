@@ -2585,6 +2585,13 @@ export interface ChatOpts {
   cacheSystem?: boolean;
   /** Stable key for provider prompt-cache routing across related turns/jobs. */
   promptCacheKey?: string;
+  /**
+   * Optional provider-call wrapper. Runs after gateway budget reserve and
+   * immediately around the test/prod provider transport. Subagent gateway loops
+   * use this to acquire/release DB rate leases without charging a lease when
+   * the budget gate rejects first.
+   */
+  withProviderCall?: <T>(call: () => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -2871,6 +2878,22 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     });
   }
 
+  let providerWrapperInvoked = false;
+  let providerCallEntered = false;
+  const runProviderCall = async <T>(call: () => Promise<T>): Promise<T> => {
+    if (!opts.withProviderCall) {
+      providerCallEntered = true;
+      return await call();
+    }
+    providerWrapperInvoked = true;
+    return await opts.withProviderCall(async () => {
+      providerCallEntered = true;
+      return await call();
+    });
+  };
+
+  const shouldPreservePreProviderError = (): boolean => providerWrapperInvoked && !providerCallEntered;
+
   // Test seam: when a test transport is installed, route through it without
   // touching provider resolution, AI SDK, or any network. See
   // __setChatTransportForTests. Production paths see _chatTransport === null.
@@ -2878,7 +2901,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
     let res: ChatResult | null = null;
     let threw: unknown = null;
     try {
-      res = await _chatTransport(opts);
+      res = await runProviderCall(() => _chatTransport!(opts));
       return res;
     } catch (err) {
       threw = err;
@@ -2991,7 +3014,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
         );
       }
 
-      const result = await codexChat({
+      const result = await runProviderCall(() => codexChat({
         cfg: {
           baseURL,
           accessToken: apiKey,
@@ -3005,7 +3028,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
         system: opts.system,
         messages: opts.messages,
         tools: opts.tools,
-      });
+      }));
 
       _recordBudget(
         `${recipe.id}:${displayModelId}`,
@@ -3016,6 +3039,9 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       );
       return result;
     } catch (err) {
+      if (shouldPreservePreProviderError()) {
+        throw err;
+      }
       const fallback = _extractUsageFromError(err, {
         inputTokens: estimatedInputTokens,
         outputTokens: maxOutputTokens,
@@ -3026,7 +3052,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   }
 
   try {
-    const result = await generateText({
+    const result = await runProviderCall(() => generateText({
       model,
       system: opts.system,
       messages: toModelMessages(opts.messages) as any,
@@ -3036,7 +3062,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       // shorter wins). Covers native-anthropic (the default provider + facts Haiku).
       abortSignal: withDefaultTimeout(opts.abortSignal, AI_CHAT_TIMEOUT_MS),
       providerOptions: Object.keys(providerOptions).length > 0 ? providerOptions : undefined,
-    });
+    }));
 
     // Normalize blocks. Vercel SDK gives us `result.content` (an array of typed
     // parts) for v6+; fall back to text + toolCalls for older shapes.
@@ -3094,6 +3120,9 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
       providerMetadata,
     };
   } catch (err) {
+    if (shouldPreservePreProviderError()) {
+      throw err;
+    }
     // Pessimistic fallback (A3 amended): when err.usage isn't there, charge
     // the worst-case ceiling — better to overcount on failure than under.
     const fallback = _extractUsageFromError(err, {
@@ -3156,6 +3185,11 @@ export interface ToolLoopOpts {
   cacheSystem?: boolean;
   /** Stable prompt-cache routing key shared by all turns in this loop. */
   promptCacheKey?: string;
+  /**
+   * Optional wrapper for each outbound model call. Called once per turn by
+   * gateway.chat after budget reservation and around provider/test transport.
+   */
+  withProviderCall?: <T>(call: () => Promise<T>) => Promise<T>;
 
   /** Crash-replay state. When set, the loop resumes from the recorded position. */
   replayState?: ToolLoopReplayState;
@@ -3280,6 +3314,7 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
         abortSignal: opts.abortSignal,
         cacheSystem: opts.cacheSystem,
         promptCacheKey: opts.promptCacheKey,
+        withProviderCall: opts.withProviderCall,
       });
     } catch (err) {
       opts.onHeartbeat?.('llm_call_failed', {

@@ -285,6 +285,9 @@ export function makeSubagentHandler(deps: SubagentDeps) {
         systemPrompt,
         toolDefs,
         maxTurns,
+        rateLeaseKey,
+        maxConcurrent,
+        leaseTtlMs,
       });
     }
 
@@ -729,6 +732,9 @@ interface GatewayRunArgs {
   systemPrompt: string;
   toolDefs: ToolDef[];
   maxTurns: number;
+  rateLeaseKey: string;
+  maxConcurrent: number;
+  leaseTtlMs: number;
 }
 
 /**
@@ -746,7 +752,7 @@ interface GatewayRunArgs {
  * reconciler sees both shapes uniformly.
  */
 async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResult> {
-  const { engine, ctx, data, model, systemPrompt, toolDefs, maxTurns } = args;
+  const { engine, ctx, data, model, systemPrompt, toolDefs, maxTurns, rateLeaseKey, maxConcurrent, leaseTtlMs } = args;
 
   // Map ToolDef → ChatToolDef (gateway shape). The gateway's chat() bridges
   // this to provider-specific tool definitions via the Vercel AI SDK.
@@ -827,6 +833,22 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     } as any);
   };
 
+  // Gateway-native loops still share the subagent provider-rate lease. The
+  // wrapper is invoked by gateway.chat after budget reservation and immediately
+  // around each provider/test transport call, preserving the legacy behavior of
+  // one lease per LLM turn without holding the slot during tool execution.
+  const withRateLease = async <T>(call: () => Promise<T>): Promise<T> => {
+    const lease = await acquireLease(engine, rateLeaseKey, ctx.id, maxConcurrent, { ttlMs: leaseTtlMs });
+    if (!lease.acquired) {
+      throw new RateLeaseUnavailableError(rateLeaseKey, lease.activeCount, lease.maxConcurrent);
+    }
+    try {
+      return await call();
+    } finally {
+      await releaseLease(engine, lease.leaseId!).catch(() => {});
+    }
+  };
+
   // Run the loop.
   const result = await gatewayToolLoop({
     model,
@@ -838,6 +860,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     abortSignal: ctx.signal,
     cacheSystem,
     promptCacheKey: `gbrain-subagent-${ctx.id}`,
+    withProviderCall: withRateLease,
     // ALWAYS pass replayState (even on fresh runs) so the gateway loop's
     // messageIdx counter starts at `nextMessageIdx` (1 on fresh, after the
     // seed user write above). Without this, the loop defaults to messageIdx=0
