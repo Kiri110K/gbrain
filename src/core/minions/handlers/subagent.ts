@@ -181,10 +181,11 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // v0.38 (S1.5 + S1.7) — capability-based gate replaces the v0.31.12
     // Anthropic-only check. The handler now routes between two paths:
     //   1. Gateway path (gateway.toolLoop, provider-agnostic) — opt in via
-    //      `gbrain config set agent.use_gateway_loop true`
+    //      `gbrain config set agent.use_gateway_loop true`, or automatically
+    //      for jobs submitted through the remote `submit_agent` op marker.
     //   2. Legacy Anthropic-direct path (existing code below)
-    // Default is the legacy path so v0.38 patch releases ship the same
-    // behavior as v0.37. Users dogfood the gateway path by flipping the flag.
+    // Direct queued jobs default to the legacy path so v0.38 patch releases
+    // preserve behavior unless the operator flips the flag.
     //
     // Refuse when the resolved model lacks tool calling, lacks explicit
     // subagent-loop approval, OR is from an unknown provider. The queue.ts
@@ -223,12 +224,15 @@ export function makeSubagentHandler(deps: SubagentDeps) {
     // deterministic so the Anthropic prompt-cache marker on the system
     // block stays a hit across turns.
 
-    // v0.38 S1.10 — feature flag for the gateway-native tool loop. When ON,
-    // route approved subagent-loop models through gateway.toolLoop(). When OFF,
-    // route through the legacy Anthropic-direct path AND refuse non-Anthropic models loudly.
+    // v0.38 S1.10 + Codex rollout hardening — the global feature flag routes
+    // approved subagent-loop models through gateway.toolLoop(). Remote
+    // `submit_agent` jobs also stamp a private marker so OAuth-bound agent jobs
+    // get the gateway path automatically while direct queued subagent jobs keep
+    // the old opt-in behavior.
     const useGatewayLoopRaw = await engine.getConfig('agent.use_gateway_loop').catch(() => null);
-    const useGatewayLoop = typeof useGatewayLoopRaw === 'string' &&
-      (useGatewayLoopRaw === 'true' || useGatewayLoopRaw === '1');
+    const useGatewayLoopFromConfig = typeof useGatewayLoopRaw === 'string' &&
+      ['true', '1', 'yes', 'on'].includes(useGatewayLoopRaw.trim().toLowerCase());
+    const useGatewayLoop = useGatewayLoopFromConfig || data.__submit_agent_gateway_loop === true;
     if (!useGatewayLoop && !isAnthropicProvider(model)) {
       throw new Error(
         `subagent job: resolved model "${model}" is non-Anthropic but agent.use_gateway_loop is not enabled. ` +

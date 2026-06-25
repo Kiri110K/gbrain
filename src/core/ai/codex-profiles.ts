@@ -1,11 +1,10 @@
 import { AIConfigError } from './errors.ts';
 
+// Only expose priced bases we have verified. Scoped profile slugs continue to
+// hang off these bases (for example `gpt-5.5-medium-fast`). Do not add newly
+// observed Codex bases here until pricing and rollout semantics are confirmed.
 export const CODEX_BASE_MODELS = [
   'gpt-5.5',
-  'gpt-5.4',
-  'gpt-5.4-mini',
-  'gpt-5.3-codex',
-  'gpt-5.3-codex-spark',
 ] as const;
 
 export type CodexBaseModel = (typeof CODEX_BASE_MODELS)[number];

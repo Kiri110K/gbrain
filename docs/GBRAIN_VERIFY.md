@@ -230,10 +230,10 @@ future/opt-in behavior, not automatic. Codex is supported for chat, text query
 expansion, and replay-tested subagent tool loops, but not embeddings or
 rerankers. `models.chat` and `models.expansion` alone do not route think,
 subagent, dream/autopilot, facts extraction, or eval flows; use `gbrain models`
-to inspect all surfaces. It currently lacks GBrain prompt-cache support, so
-model routing may warn about degraded prompt-caching/cost semantics. Codex
-expansion is text-only; image OCR still needs a multimodal expansion
-model/provider and safely skips Codex.
+to inspect all surfaces. Codex participates in GBrain prompt-cache routing via
+`prompt_cache_key` and cache-locality headers, so Codex subagent routes should
+not warn as prompt-cache-unsupported. Codex expansion is text-only; image OCR
+still needs a multimodal expansion model/provider and safely skips Codex.
 
 ---
 

@@ -202,25 +202,25 @@ describe('resolveModel — v0.31.12 tier system', () => {
     expect(stderrCapture).toContain('tier.subagent');
   });
 
-  test('tier.subagent accepts Codex once supports_subagent_loop is approved (with cost warn)', async () => {
+  test('tier.subagent accepts Codex once supports_subagent_loop and prompt cache are approved', async () => {
     stub.set('models.tier.subagent', 'codex:gpt-5.5');
     const m = await resolveModel(stub as never, {
       tier: 'subagent',
       fallback: 'sonnet',
     });
     expect(m).toBe('codex:gpt-5.5');
-    expect(stderrCapture).toContain('provider does not support prompt caching');
+    expect(stderrCapture).not.toContain('provider does not support prompt caching');
     expect(stderrCapture).not.toContain('falling back');
   });
 
-  test('tier.subagent accepts Codex scoped profiles once supports_subagent_loop is approved (with cost warn)', async () => {
+  test('tier.subagent accepts Codex scoped profiles once supports_subagent_loop and prompt cache are approved', async () => {
     stub.set('models.tier.subagent', 'codex:gpt-5.5-medium-fast');
     const m = await resolveModel(stub as never, {
       tier: 'subagent',
       fallback: 'sonnet',
     });
     expect(m).toBe('codex:gpt-5.5-medium-fast');
-    expect(stderrCapture).toContain('provider does not support prompt caching');
+    expect(stderrCapture).not.toContain('provider does not support prompt caching');
     expect(stderrCapture).not.toContain('falling back');
   });
 

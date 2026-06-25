@@ -122,7 +122,7 @@ describe('gateway.chat Codex routing', () => {
       reasoning: { effort: 'medium', summary: 'auto' },
       stream: true,
     });
-    expect(body.max_output_tokens).toBeUndefined();
+    expect(body.max_output_tokens).toBe(777);
     expect(body.input).toEqual([
       { role: 'user', content: [{ type: 'input_text', text: 'Say hello.' }] },
     ]);

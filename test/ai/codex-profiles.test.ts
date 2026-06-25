@@ -28,11 +28,15 @@ describe('Codex scoped model profiles', () => {
     expect(profile.runtime.latency).toBe('fast');
   });
 
-  test('hyphenated base models parse from longest base model first', () => {
-    const profile = resolveCodexProfile('gpt-5.3-codex-spark-medium-fast');
-    expect(profile.providerModelId).toBe('gpt-5.3-codex-spark');
-    expect(profile.runtime.reasoning.effort).toBe('medium');
-    expect(profile.runtime.latency).toBe('fast');
+  test('non-priced Codex base models are not advertised as supported profiles', () => {
+    for (const modelId of [
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex',
+      'gpt-5.3-codex-spark-medium-fast',
+    ]) {
+      expect(() => resolveCodexProfile(modelId)).toThrow(/Unknown Codex (?:model|profile)/);
+    }
   });
 
   test('unknown suffix fails loud with a useful error', () => {

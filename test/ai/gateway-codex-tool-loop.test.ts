@@ -286,4 +286,43 @@ describe('gateway.toolLoop Codex Responses transport', () => {
       },
     ]);
   });
+
+  test('incomplete max_output_tokens response returns length instead of successful end', async () => {
+    responses = [
+      {
+        id: 'resp_codex_length',
+        status: 'incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'partial answer' }],
+          },
+        ],
+        usage: { input_tokens: 9, output_tokens: 1 },
+      },
+    ];
+
+    const result = await toolLoop({
+      initialMessages: [{ role: 'user', content: 'Give a truncated answer.' }],
+      tools: [lookupTool],
+      toolHandlers: new Map([['lookup_brain', {
+        idempotent: true,
+        async execute() {
+          throw new Error('tool handler should not run on length stop');
+        },
+      }]]),
+      maxTurns: 3,
+    });
+
+    expect(result.stopReason).toBe('length');
+    expect(result.finalText).toBe('partial answer');
+    expect(result.totalUsage).toEqual({
+      input_tokens: 9,
+      output_tokens: 1,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
+    });
+  });
 });

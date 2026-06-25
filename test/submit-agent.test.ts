@@ -348,6 +348,7 @@ describe('submit_agent op (v0.38 Slice 3 — remote-callable agent dispatch with
       expect(data.prompt).toBe('research the YC W26 batch');
       expect(data.allowed_tools).toEqual(['search']);
       expect(data.__owner_client_id).toBe('cursor');
+      expect(data.__submit_agent_gateway_loop).toBe(true);
       expect(data.source_id).toBe('default'); // auto-set from bound_source_id
 
       // Audit file written.

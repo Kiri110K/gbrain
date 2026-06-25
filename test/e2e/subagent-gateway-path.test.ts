@@ -70,15 +70,22 @@ interface FakeJobOpts {
   prompt: string;
   model?: string;
   allowed_tools?: string[];
+  submitAgentGatewayLoop?: boolean;
 }
 
 async function makeFakeJob(opts: FakeJobOpts): Promise<{ jobId: number; ctx: MinionJobContext; tokenSink: any[] }> {
   // Insert a minion_jobs row so foreign keys validate (subagent_tool_executions.job_id FK).
+  const data: Record<string, unknown> = {
+    prompt: opts.prompt,
+    model: opts.model,
+    allowed_tools: opts.allowed_tools,
+    ...(opts.submitAgentGatewayLoop ? { __submit_agent_gateway_loop: true } : {}),
+  };
   const rows = await engine.executeRaw<{ id: number }>(
     `INSERT INTO minion_jobs (name, status, data, queue, priority, created_at)
      VALUES ('subagent', 'active', $1::jsonb, 'default', 0, now())
      RETURNING id`,
-    [JSON.stringify({ prompt: opts.prompt, model: opts.model, allowed_tools: opts.allowed_tools })],
+    [JSON.stringify(data)],
   );
   const jobId = rows[0].id;
 
@@ -89,7 +96,7 @@ async function makeFakeJob(opts: FakeJobOpts): Promise<{ jobId: number; ctx: Min
   const ctx: MinionJobContext = {
     id: jobId,
     name: 'subagent',
-    data: { prompt: opts.prompt, model: opts.model, allowed_tools: opts.allowed_tools },
+    data,
     attempts_made: 0,
     signal: abortCtrl.signal,
     shutdownSignal: shutdownCtrl.signal,
@@ -375,6 +382,48 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
     const result = await handler(ctx);
     expect(result.result).toBe('gpt-5 says hi');
     expect(result.stop_reason).toBe('end_turn');
+  });
+
+  it('submit_agent private marker enables Codex gateway path even when global flag is unset', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    let observedModel: string | undefined;
+    __setChatTransportForTests(async (opts) => {
+      observedModel = opts.model;
+      return {
+        text: 'codex marker path',
+        blocks: [{ type: 'text', text: 'codex marker path' }] as ChatBlock[],
+        stopReason: 'end',
+        usage: { input_tokens: 4, output_tokens: 4, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: 'codex:gpt-5.5-medium-fast',
+        providerId: 'codex',
+      } satisfies ChatResult;
+    });
+
+    const tools = makeStubTools([]);
+    const handler = buildHandler(tools);
+    const { ctx } = await makeFakeJob({
+      prompt: 'hi',
+      model: 'codex:gpt-5.5-medium-fast',
+      submitAgentGatewayLoop: true,
+    });
+
+    const result = await handler(ctx);
+    expect(observedModel).toBe('codex:gpt-5.5-medium-fast');
+    expect(result.result).toBe('codex marker path');
+    expect(result.stop_reason).toBe('end_turn');
+  });
+
+  it('direct Codex subagent without submit_agent marker still fails when global gateway flag is unset', async () => {
+    await engine.setConfig('agent.use_gateway_loop', 'false');
+    __setChatTransportForTests(async () => {
+      throw new Error('gateway transport should not be called without marker');
+    });
+
+    const tools = makeStubTools([]);
+    const handler = buildHandler(tools);
+    const { ctx } = await makeFakeJob({ prompt: 'hi', model: 'codex:gpt-5.5-medium-fast' });
+
+    await expect(handler(ctx)).rejects.toThrow(/agent\.use_gateway_loop is not enabled/);
   });
 
   it('write-ordering invariant: assistant message persisted BEFORE tool pending row', async () => {

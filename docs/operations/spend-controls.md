@@ -53,12 +53,11 @@ refresh/auth-store reuse is future/opt-in behavior, not automatic.
 Cost/accounting caveat: `models.chat` and `models.expansion` alone do not route
 every non-embedding LLM surface; check think/deep, subagent, dream/autopilot,
 facts extraction, and eval rows with `gbrain models`. Codex is approved for
-tool-loop/subagent use after replay tests, but GBrain currently has no Codex
-prompt-cache implementation (`supports_prompt_cache:false`) and
-subscription-backed Codex usage does not map cleanly to OpenAI API token pricing.
-Model routing may warn about degraded prompt caching or cost semantics. Text
-query expansion can use Codex; image OCR still needs a multimodal expansion
-model/provider and safely skips Codex.
+tool-loop/subagent use after replay tests and participates in prompt-cache
+routing (`supports_prompt_cache:true`) via `prompt_cache_key` plus Codex
+cache-locality headers. Subscription-backed Codex usage still may not map
+cleanly to OpenAI API token pricing. Text query expansion can use Codex; image
+OCR still needs a multimodal expansion model/provider and safely skips Codex.
 
 ## `spend.posture` — one switch for "cost is not my constraint"
 

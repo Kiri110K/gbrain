@@ -14,6 +14,10 @@ describe('recipe: codex', () => {
     expect(r?.touchpoints.expansion?.models).toEqual(CODEX_CHAT_MODELS);
     expect(r?.touchpoints.chat?.models).toEqual(CODEX_CHAT_MODELS);
     expect(r?.touchpoints.chat?.models).toContain('gpt-5.5');
+    expect(r?.touchpoints.chat?.models).toEqual(['gpt-5.5']);
+    expect(r?.touchpoints.expansion?.models).toEqual(['gpt-5.5']);
+    expect(r?.touchpoints.chat?.models).not.toContain('gpt-5.4');
+    expect(r?.touchpoints.chat?.models).not.toContain('gpt-5.3-codex-spark');
     expect(r?.touchpoints.chat?.models).not.toContain('gpt-5.5-xhigh-fast');
     expect(r?.touchpoints.embedding).toBeUndefined();
     expect(r?.touchpoints.reranker).toBeUndefined();

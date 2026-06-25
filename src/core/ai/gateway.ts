@@ -3191,7 +3191,7 @@ export interface ToolLoopOpts {
   onHeartbeat?: (event: string, data: Record<string, unknown>) => void;
 }
 
-export type ToolLoopStopReason = 'end' | 'max_turns' | 'refusal' | 'content_filter' | 'aborted' | 'unrecoverable';
+export type ToolLoopStopReason = 'end' | 'max_turns' | 'length' | 'refusal' | 'content_filter' | 'aborted' | 'unrecoverable';
 
 export interface ToolLoopResult {
   finalText: string;
@@ -3307,6 +3307,11 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
     }
     if (chatResult.stopReason === 'content_filter') {
       stopReason = 'content_filter';
+      finalText = chatResult.text;
+      break;
+    }
+    if (chatResult.stopReason === 'length') {
+      stopReason = 'length';
       finalText = chatResult.text;
       break;
     }

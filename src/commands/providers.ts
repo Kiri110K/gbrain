@@ -14,9 +14,9 @@ import type { Recipe } from '../core/ai/types.ts';
 
 const SCHEMA_VERSION = 1;
 
-type TouchpointFilter = 'embedding' | 'expansion' | 'chat';
+export type TouchpointFilter = 'embedding' | 'expansion' | 'chat';
 
-interface ProviderOption {
+export interface ProviderOption {
   id: string;
   touchpoint: TouchpointFilter;
   model: string;
@@ -29,6 +29,32 @@ interface ProviderOption {
   tier: 'native' | 'openai-compat';
   pros: string[];
   cons: string[];
+}
+
+export interface ProviderProbeStatus {
+  reachable: boolean;
+  models_endpoint_valid: boolean;
+}
+
+export interface ProviderExplainMatrix {
+  schema_version: number;
+  generated_at: string;
+  env_detected: Record<string, boolean>;
+  local_probes: {
+    ollama: ProviderProbeStatus & { url: string };
+    lmstudio: ProviderProbeStatus & { url: string };
+  };
+  options: ProviderOption[];
+  recommended: string;
+  recommended_reason: string;
+}
+
+export interface BuildProviderExplainMatrixOptions {
+  env?: NodeJS.ProcessEnv;
+  recipes?: Recipe[];
+  ollama?: ProviderProbeStatus;
+  lmstudio?: ProviderProbeStatus;
+  generatedAt?: string;
 }
 
 function configureFromEnv(): void {
@@ -298,22 +324,31 @@ function runEnv(args: string[]): void {
   }
 }
 
-async function runExplain(args: string[]): Promise<void> {
-  const asJson = args.includes('--json') || args.includes('-j');
+export async function buildProviderExplainMatrix(
+  opts: BuildProviderExplainMatrixOptions = {},
+): Promise<ProviderExplainMatrix> {
+  const env = opts.env ?? process.env;
+  const recipes = opts.recipes ?? listRecipes();
 
-  const recipes = listRecipes();
-  const env_detected = {
-    OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
-    GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
-    ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
-    VOYAGE_API_KEY: !!process.env.VOYAGE_API_KEY,
-    DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
-    GROQ_API_KEY: !!process.env.GROQ_API_KEY,
-    TOGETHER_API_KEY: !!process.env.TOGETHER_API_KEY,
+  // Parallel probes for local providers (1s timeout each). Tests can inject
+  // deterministic probe results so the JSON builder stays pure and secret-free.
+  const [ollama, lmstudio] = await Promise.all([
+    opts.ollama ? Promise.resolve(opts.ollama) : probeOllama(),
+    opts.lmstudio ? Promise.resolve(opts.lmstudio) : probeLMStudio(),
+  ]);
+
+  const env_detected: Record<string, boolean> = {
+    OPENAI_API_KEY: !!env.OPENAI_API_KEY,
+    GOOGLE_GENERATIVE_AI_API_KEY: !!env.GOOGLE_GENERATIVE_AI_API_KEY,
+    ANTHROPIC_API_KEY: !!env.ANTHROPIC_API_KEY,
+    VOYAGE_API_KEY: !!env.VOYAGE_API_KEY,
+    DEEPSEEK_API_KEY: !!env.DEEPSEEK_API_KEY,
+    GROQ_API_KEY: !!env.GROQ_API_KEY,
+    TOGETHER_API_KEY: !!env.TOGETHER_API_KEY,
+    GBRAIN_CODEX_ACCESS_TOKEN: !!env.GBRAIN_CODEX_ACCESS_TOKEN,
+    CODEX_ACCESS_TOKEN: !!env.CODEX_ACCESS_TOKEN,
+    GBRAIN_CODEX_BASE_URL: !!env.GBRAIN_CODEX_BASE_URL,
   };
-
-  // Parallel probes for local providers (1s timeout each)
-  const [ollama, lmstudio] = await Promise.all([probeOllama(), probeLMStudio()]);
 
   const options: ProviderOption[] = [];
   for (const r of recipes) {
@@ -326,7 +361,7 @@ async function runExplain(args: string[]): Promise<void> {
         dims: m.default_dims,
         cost_per_1m_tokens_usd: m.cost_per_1m_tokens_usd,
         price_last_verified: m.price_last_verified,
-        env_ready: envReady(r) || (r.id === 'ollama' && ollama.models_endpoint_valid === true),
+        env_ready: envReady(r, env) || (r.id === 'ollama' && ollama.models_endpoint_valid === true),
         tier: r.tier,
         pros: prosFor(r, 'embedding'),
         cons: consFor(r),
@@ -340,7 +375,7 @@ async function runExplain(args: string[]): Promise<void> {
         model: m.models[0],
         cost_per_1m_tokens_usd: m.cost_per_1m_tokens_usd,
         price_last_verified: m.price_last_verified,
-        env_ready: envReady(r),
+        env_ready: envReady(r, env),
         tier: r.tier,
         pros: prosFor(r, 'expansion'),
         cons: consFor(r),
@@ -355,7 +390,7 @@ async function runExplain(args: string[]): Promise<void> {
         cost_per_1m_input_usd: m.cost_per_1m_input_usd,
         cost_per_1m_output_usd: m.cost_per_1m_output_usd,
         price_last_verified: m.price_last_verified,
-        env_ready: envReady(r),
+        env_ready: envReady(r, env),
         tier: r.tier,
         pros: prosFor(r, 'chat'),
         cons: consFor(r),
@@ -365,18 +400,23 @@ async function runExplain(args: string[]): Promise<void> {
 
   const recommended = pickRecommended(options, env_detected, ollama.models_endpoint_valid === true);
 
-  const matrix = {
+  return {
     schema_version: SCHEMA_VERSION,
-    generated_at: new Date().toISOString(),
+    generated_at: opts.generatedAt ?? new Date().toISOString(),
     env_detected,
     local_probes: {
-      ollama: { url: process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434/v1', reachable: ollama.reachable, models_endpoint_valid: ollama.models_endpoint_valid === true },
-      lmstudio: { url: process.env.LMSTUDIO_BASE_URL ?? 'http://localhost:1234/v1', reachable: lmstudio.reachable, models_endpoint_valid: lmstudio.models_endpoint_valid === true },
+      ollama: { url: env.OLLAMA_BASE_URL ?? 'http://localhost:11434/v1', reachable: ollama.reachable, models_endpoint_valid: ollama.models_endpoint_valid === true },
+      lmstudio: { url: env.LMSTUDIO_BASE_URL ?? 'http://localhost:1234/v1', reachable: lmstudio.reachable, models_endpoint_valid: lmstudio.models_endpoint_valid === true },
     },
     options,
     recommended: recommended.id,
     recommended_reason: recommended.reason,
   };
+}
+
+async function runExplain(args: string[]): Promise<void> {
+  const asJson = args.includes('--json') || args.includes('-j');
+  const matrix = await buildProviderExplainMatrix();
 
   if (asJson) {
     console.log(JSON.stringify(matrix, null, 2));
@@ -387,24 +427,24 @@ async function runExplain(args: string[]): Promise<void> {
   console.log(`Provider matrix (schema v${SCHEMA_VERSION}, generated ${matrix.generated_at})`);
   console.log('');
   console.log('Environment:');
-  for (const [k, v] of Object.entries(env_detected)) console.log(`  ${k.padEnd(32)} ${v ? '✓ set' : '✗ not set'}`);
+  for (const [k, v] of Object.entries(matrix.env_detected)) console.log(`  ${k.padEnd(32)} ${v ? '✓ set' : '✗ not set'}`);
   console.log(`  Ollama @ ${matrix.local_probes.ollama.url}  ${matrix.local_probes.ollama.models_endpoint_valid ? '✓ reachable' : '✗ not detected'}`);
   console.log('');
   console.log('Embedding options:');
-  for (const o of options.filter(x => x.touchpoint === 'embedding')) {
+  for (const o of matrix.options.filter(x => x.touchpoint === 'embedding')) {
     const cost = o.cost_per_1m_tokens_usd !== undefined ? `$${o.cost_per_1m_tokens_usd}/1M` : '—';
     const dims = o.dims ? `${o.dims}d` : '—';
     console.log(`  ${o.env_ready ? '✓' : '✗'} ${o.id.padEnd(44)} ${dims.padEnd(8)} ${cost.padEnd(10)} ${o.tier}`);
   }
   console.log('');
   console.log('Expansion options:');
-  for (const o of options.filter(x => x.touchpoint === 'expansion')) {
+  for (const o of matrix.options.filter(x => x.touchpoint === 'expansion')) {
     const cost = o.cost_per_1m_tokens_usd !== undefined ? `$${o.cost_per_1m_tokens_usd}/1M` : '—';
     console.log(`  ${o.env_ready ? '✓' : '✗'} ${o.id.padEnd(44)} ${cost.padEnd(10)} ${o.tier}`);
   }
   console.log('');
   console.log('Chat options:');
-  for (const o of options.filter(x => x.touchpoint === 'chat')) {
+  for (const o of matrix.options.filter(x => x.touchpoint === 'chat')) {
     const inCost = o.cost_per_1m_input_usd !== undefined ? `in $${o.cost_per_1m_input_usd}` : '—';
     const outCost = o.cost_per_1m_output_usd !== undefined ? `out $${o.cost_per_1m_output_usd}` : '—';
     console.log(`  ${o.env_ready ? '✓' : '✗'} ${o.id.padEnd(44)} ${inCost.padEnd(12)} ${outCost.padEnd(12)} ${o.tier}`);
@@ -421,6 +461,7 @@ function prosFor(r: Recipe, touchpoint: TouchpointFilter): string[] {
   const out: string[] = [];
   if (touchpoint === 'chat') {
     if (r.id === 'anthropic') out.push('Default subagent driver', 'Prompt-cache support', 'Strong tool calling');
+    else if (r.id === 'codex') out.push('Codex Responses transport', 'Prompt-cache routing', 'Replay-tested tool loop');
     else if (r.id === 'openai') out.push('Strong tool calling', 'Wide adapter support');
     else if (r.id === 'google') out.push('1M context', 'Cheap');
     else if (r.id === 'deepseek') out.push('25-40x cheaper than Anthropic', 'Strong reasoning');
@@ -431,6 +472,7 @@ function prosFor(r: Recipe, touchpoint: TouchpointFilter): string[] {
   if (r.id === 'openai') out.push('Default', 'High quality', 'Wide compatibility');
   else if (r.id === 'google') out.push('Smaller vectors', 'Matryoshka dim flex');
   else if (r.id === 'anthropic') out.push('Default expansion model', 'Best-in-class reasoning');
+  else if (r.id === 'codex') out.push('Codex Responses text expansion', 'Prompt-cache routing');
   else if (r.id === 'ollama') out.push('Local', 'Free', 'Private');
   else if (r.id === 'voyage') out.push('Best rerank pairing');
   else if (r.id === 'litellm') out.push('Universal coverage (Bedrock/Vertex/Azure/any)');

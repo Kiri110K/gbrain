@@ -151,9 +151,9 @@ logs, issue reports, or screenshots. Use placeholders such as
 can expire; refresh/auth-store reuse is future/opt-in behavior, not automatic.
 
 Capability caveats: Codex is approved for tool-loop/subagent routing after
-replay tests, but GBrain does not currently implement Codex prompt-cache support
-(`supports_prompt_cache:false`). Model routing may warn about degraded prompt
-caching or cost semantics. Codex expansion profiles such as
+replay tests and now participates in GBrain prompt-cache routing
+(`supports_prompt_cache:true`) via `prompt_cache_key` plus Codex cache-locality
+headers. Codex expansion profiles such as
 `models.expansion = codex:gpt-5.5-medium-fast` are for text query
 expansion only; image OCR still needs a multimodal expansion model/provider and
 skips Codex rather than treating it as OCR-capable.

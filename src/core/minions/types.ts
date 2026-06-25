@@ -412,6 +412,12 @@ export interface SubagentHandlerData {
   /** Max assistant turns before the loop fails with stop_reason='max_turns'. */
   max_turns?: number;
   /**
+   * Private marker stamped by the remote `submit_agent` op. It lets those
+   * OAuth-bound jobs use the gateway-native loop even while direct queued
+   * subagent jobs keep the legacy `agent.use_gateway_loop` opt-in behavior.
+   */
+  __submit_agent_gateway_loop?: boolean;
+  /**
    * Whitelist of tool names the agent may call. MUST be a subset of the
    * derived registry names — invalid entries are rejected at tool-dispatch
    * time, not silently ignored. Empty array = no tools.

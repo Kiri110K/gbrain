@@ -265,6 +265,70 @@ describe('Codex Responses adapter', () => {
     });
   });
 
+  test('incomplete function-call responses do not expose partial tool calls for dispatch', () => {
+    const result = normalizeCodexResponse({
+      providerId: 'codex',
+      modelId: 'gpt-5.5',
+      response: {
+        status: 'incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_partial',
+            name: 'lookup',
+            arguments: '{"slug":"truncated',
+          },
+        ],
+      },
+    });
+
+    expect(result.blocks).toEqual([]);
+    expect(result.stopReason).toBe('length');
+  });
+
+  test('incomplete_details alone suppresses partial tool calls before dispatch', () => {
+    const result = normalizeCodexResponse({
+      providerId: 'codex',
+      modelId: 'gpt-5.5',
+      response: {
+        incomplete_details: { reason: 'max_output_tokens' },
+        output: [
+          {
+            type: 'function_call',
+            call_id: 'call_partial_no_status',
+            name: 'lookup',
+            arguments: '{"slug":"truncated',
+          },
+        ],
+      },
+    });
+
+    expect(result.blocks).toEqual([]);
+    expect(result.stopReason).toBe('length');
+  });
+
+  test('refusal response normalizes refusal text and refusal stop reason', () => {
+    const result = normalizeCodexResponse({
+      providerId: 'codex',
+      modelId: 'gpt-5.5',
+      response: {
+        status: 'completed',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'refusal', refusal: 'I cannot help with that.' }],
+          },
+        ],
+      },
+    });
+
+    expect(result.text).toBe('I cannot help with that.');
+    expect(result.blocks).toEqual([{ type: 'text', text: 'I cannot help with that.' }]);
+    expect(result.stopReason).toBe('refusal');
+  });
+
   test('invalid JSON function-call arguments become safe string payloads without throwing', () => {
     const result = normalizeCodexResponse({
       providerId: 'codex',
@@ -294,13 +358,14 @@ describe('Codex Responses adapter', () => {
 
   test('redactCodexSecrets redacts bearer tokens and explicit secret strings', () => {
     const redacted = redactCodexSecrets(
-      'request failed: Authorization: Bearer codex-...ken; raw=codex-secret-token',
+      'request failed: Authorization: Bearer raw-provider-secret raw=codex-secret-token',
       ['codex-secret-token'],
     );
 
     expect(redacted).toContain('Authorization: Bearer ***');
     expect(redacted).toContain('raw=[REDACTED]');
     expect(redacted).not.toContain('codex-secret-token');
+    expect(redacted).not.toContain('raw-provider-secret');
   });
 });
 
@@ -403,6 +468,131 @@ describe('codexChat HTTP transport', () => {
     }
   });
 
+  test('streaming SSE resolves after terminal response without waiting for EOF', async () => {
+    const encoder = new TextEncoder();
+    let canceled = false;
+    const restore = installFetchStub(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode([
+          'data: {"type":"response.output_text.delta","delta":"Terminal"}',
+          '',
+          'data: {"type":"response.completed","response":{"id":"resp_terminal","status":"completed","usage":{"input_tokens":2,"output_tokens":1}}}',
+          '',
+          '',
+        ].join('\n')));
+        setTimeout(() => {
+          if (!canceled) controller.error(new Error('stream should have been canceled after terminal response'));
+        }, 20);
+      },
+      cancel() {
+        canceled = true;
+      },
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'Stream terminal please.' }],
+      });
+
+      expect(result.text).toBe('Terminal');
+      expect(result.stopReason).toBe('end');
+      expect(canceled).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE without content-type still resolves before EOF', async () => {
+    const encoder = new TextEncoder();
+    let canceled = false;
+    const restore = installFetchStub(() => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode([
+          'data: {"type":"response.output_text.delta","delta":"No header"}',
+          '',
+          'data: {"type":"response.completed","response":{"id":"resp_no_header","status":"completed","usage":{"input_tokens":2,"output_tokens":1}}}',
+          '',
+          '',
+        ].join('\n')));
+        setTimeout(() => {
+          if (!canceled) controller.error(new Error('no-header stream should have been canceled'));
+        }, 20);
+      },
+      cancel() {
+        canceled = true;
+      },
+    }), { status: 200 }));
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'Stream without content-type.' }],
+      });
+
+      expect(result.text).toBe('No header');
+      expect(result.stopReason).toBe('end');
+      expect(canceled).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE refusal deltas normalize to refusal stop reason', async () => {
+    const sse = [
+      'data: {"type":"response.refusal.delta","delta":"I cannot"}',
+      '',
+      'data: {"type":"response.refusal.delta","delta":" help."}',
+      '',
+      'data: {"type":"response.completed","response":{"id":"resp_refusal","status":"completed","usage":{"input_tokens":5,"output_tokens":2}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'Refuse please.' }],
+      });
+
+      expect(result.text).toBe('I cannot help.');
+      expect(result.blocks).toEqual([{ type: 'text', text: 'I cannot help.' }]);
+      expect(result.stopReason).toBe('refusal');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE incomplete function-call terminal event suppresses partial tool dispatch', async () => {
+    const sse = [
+      'data: {"type":"response.incomplete","response":{"id":"resp_incomplete_tool","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"function_call","call_id":"call_stream_partial","name":"lookup","arguments":"{\\"slug\\":\\"truncated"}],"usage":{"input_tokens":5,"output_tokens":1}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const result = await codexChat({
+        cfg: baseCodexCfg(),
+        messages: [{ role: 'user', content: 'Stream incomplete function call.' }],
+        tools: [{
+          name: 'lookup',
+          description: 'Lookup a thing.',
+          inputSchema: { type: 'object', properties: { slug: { type: 'string' } } },
+        }],
+      });
+
+      expect(result.blocks).toEqual([]);
+      expect(result.stopReason).toBe('length');
+    } finally {
+      restore();
+    }
+  });
+
   test('streaming SSE can use final response output when no text deltas were emitted', async () => {
     const sse = [
       'data: {"type":"response.completed","response":{"id":"resp_final","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Final only."}]}],"usage":{"input_tokens":6,"output_tokens":2}}}',
@@ -428,7 +618,7 @@ describe('codexChat HTTP transport', () => {
   test('streaming SSE error events are redacted before throwing', async () => {
     const providerBearerToken = 'provider-stream-secret';
     const sse = [
-      `data: {"type":"error","message":"raw=${CODEX_ACCESS_TOKEN}; Authorization: Bearer ${providerBearerToken}"}`,
+      `data: {"type":"error","message":"Internal server error raw=${CODEX_ACCESS_TOKEN}; Authorization: Bearer ${providerBearerToken}"}`,
       '',
     ].join('\n');
     const restore = installFetchStub(() => new Response(sse, {
@@ -454,6 +644,68 @@ describe('codexChat HTTP transport', () => {
     }
   });
 
+  test('streaming SSE type:error invalid request and unknown model failures throw AIConfigError', async () => {
+    const cases = [
+      { code: 'invalid_request_error', message: 'Invalid request: unknown model gpt-5.4.' },
+      { error: { code: 'model_not_found', message: 'The requested model does not exist.' } },
+    ];
+
+    for (const payload of cases) {
+      const sse = [
+        `data: ${JSON.stringify({ type: 'error', ...payload })}`,
+        '',
+      ].join('\n');
+      const restore = installFetchStub(() => new Response(sse, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+      try {
+        const err = await expectCodexError(
+          codexChat({
+            cfg: baseCodexCfg(),
+            messages: [{ role: 'user', content: 'Stream config error.' }],
+          }),
+          AIConfigError,
+        );
+
+        expect(err.message).toContain('Codex Responses stream error');
+      } finally {
+        restore();
+      }
+    }
+  });
+
+  test('streaming SSE type:error rate limit and server failures stay transient', async () => {
+    const cases = [
+      { code: 'rate_limit_exceeded', message: 'Rate limit exceeded; retry later.' },
+      { error: { code: 'internal_server_error', message: 'Backend server overloaded (500).' } },
+    ];
+
+    for (const payload of cases) {
+      const sse = [
+        `data: ${JSON.stringify({ type: 'error', ...payload })}`,
+        '',
+      ].join('\n');
+      const restore = installFetchStub(() => new Response(sse, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+      try {
+        const err = await expectCodexError(
+          codexChat({
+            cfg: baseCodexCfg(),
+            messages: [{ role: 'user', content: 'Stream transient error.' }],
+          }),
+          AITransientError,
+        );
+
+        expect(err.message).toContain('Codex Responses stream error');
+      } finally {
+        restore();
+      }
+    }
+  });
+
   test('streaming SSE failed terminal responses throw instead of normalizing as success', async () => {
     const sse = [
       'data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"message":"backend failed"},"usage":{"input_tokens":6,"output_tokens":0}}}',
@@ -474,6 +726,130 @@ describe('codexChat HTTP transport', () => {
 
       expect(err.message).toContain('Codex Responses stream failed');
       expect(err.message).toContain('backend failed');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE failed terminal config errors throw AIConfigError', async () => {
+    const sse = [
+      'data: {"type":"response.failed","response":{"id":"resp_failed_config","status":"failed","error":{"code":"invalid_request_error","message":"bad request"},"usage":{"input_tokens":6,"output_tokens":0}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'Stream failed with config.' }],
+        }),
+        AIConfigError,
+      );
+
+      expect(err.message).toContain('bad request');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE failed terminal message-only config errors throw AIConfigError', async () => {
+    const sse = [
+      'data: {"type":"response.failed","response":{"id":"resp_failed_message_config","status":"failed","error":{"message":"The requested model does not exist or you do not have access to it."},"usage":{"input_tokens":6,"output_tokens":0}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'Stream failed with message-only config.' }],
+        }),
+        AIConfigError,
+      );
+
+      expect(err.message).toContain('requested model does not exist');
+    } finally {
+      restore();
+    }
+  });
+
+  test('JSON response.failed message-only config errors throw AIConfigError', async () => {
+    const { restore } = installJsonResponseFetch({
+      id: 'resp_failed_json_message_config',
+      status: 'failed',
+      error: { message: 'Unsupported model option for this request.' },
+    });
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'JSON failed with message-only config.' }],
+        }),
+        AIConfigError,
+      );
+
+      expect(err.message).toContain('Unsupported model option');
+    } finally {
+      restore();
+    }
+  });
+
+  test('streaming SSE failed terminal quota and policy errors throw AIConfigError', async () => {
+    const cases = [
+      { code: 'insufficient_quota', message: 'Quota exceeded for this account.' },
+      { code: 'content_policy_violation', message: 'Content policy rejected this request.' },
+    ];
+
+    for (const item of cases) {
+      const sse = [
+        `data: {"type":"response.failed","response":{"id":"resp_failed_${item.code}","status":"failed","error":{"code":"${item.code}","message":"${item.message}"},"usage":{"input_tokens":6,"output_tokens":0}}}`,
+        '',
+      ].join('\n');
+      const restore = installFetchStub(() => new Response(sse, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+      try {
+        const err = await expectCodexError(
+          codexChat({
+            cfg: baseCodexCfg(),
+            messages: [{ role: 'user', content: `Stream failed with ${item.code}.` }],
+          }),
+          AIConfigError,
+        );
+
+        expect(err.message).toContain(item.message);
+      } finally {
+        restore();
+      }
+    }
+  });
+
+  test('streaming SSE failed terminal message-only rate limits remain transient', async () => {
+    const sse = [
+      'data: {"type":"response.failed","response":{"id":"resp_failed_rate_limit","status":"failed","error":{"message":"Model rate limit exceeded; try again later."},"usage":{"input_tokens":6,"output_tokens":0}}}',
+      '',
+    ].join('\n');
+    const restore = installFetchStub(() => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }));
+    try {
+      const err = await expectCodexError(
+        codexChat({
+          cfg: baseCodexCfg(),
+          messages: [{ role: 'user', content: 'Stream failed with rate limit.' }],
+        }),
+        AITransientError,
+      );
+
+      expect(err.message).toContain('Model rate limit exceeded');
     } finally {
       restore();
     }
@@ -622,17 +998,80 @@ describe('codexChat HTTP transport', () => {
     }
   });
 
-  test('max_output_tokens is omitted because the ChatGPT Codex backend rejects it', async () => {
+  test('unsafe prompt cache key is normalized once for body and routing headers', async () => {
     const { calls, restore } = installJsonResponseFetch(codexTextResponse());
     try {
-      for (const maxOutputTokens of [128, 0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
+      await codexChat({
+        cfg: baseCodexCfg({ promptCacheKey: '  run\t☃\nkey\u0000/with spaces  ' }),
+        messages: [{ role: 'user', content: 'Use normalized cache routing.' }],
+      });
+
+      const body = parseRequestBody(calls[0]);
+      const expected = 'run-key-/with-spaces';
+      expect(body.prompt_cache_key).toBe(expected);
+      expect(headerValue(calls[0].init?.headers, 'session_id')).toBe(expected);
+      expect(headerValue(calls[0].init?.headers, 'session-id')).toBe(expected);
+      expect(headerValue(calls[0].init?.headers, 'thread-id')).toBe(expected);
+      expect(headerValue(calls[0].init?.headers, 'x-client-request-id')).toBe(expected);
+    } finally {
+      restore();
+    }
+  });
+
+  test('long prompt cache keys are truncated consistently for body and routing headers', async () => {
+    const { calls, restore } = installJsonResponseFetch(codexTextResponse());
+    try {
+      await codexChat({
+        cfg: baseCodexCfg({ promptCacheKey: 'x'.repeat(250) }),
+        messages: [{ role: 'user', content: 'Use long cache routing.' }],
+      });
+
+      const body = parseRequestBody(calls[0]);
+      const expected = 'x'.repeat(200);
+      expect(body.prompt_cache_key).toBe(expected);
+      expect(headerValue(calls[0].init?.headers, 'session_id')).toBe(expected);
+      expect(headerValue(calls[0].init?.headers, 'x-client-request-id')).toBe(expected);
+    } finally {
+      restore();
+    }
+  });
+
+  test('empty or unsafe-only prompt cache keys omit body and routing headers', async () => {
+    const { calls, restore } = installJsonResponseFetch(codexTextResponse());
+    try {
+      await codexChat({
+        cfg: baseCodexCfg({ promptCacheKey: ' \n\t☃\u0000 ' }),
+        messages: [{ role: 'user', content: 'No cache routing.' }],
+      });
+
+      const body = parseRequestBody(calls[0]);
+      expect(body.prompt_cache_key).toBeUndefined();
+      expect(headerValue(calls[0].init?.headers, 'session_id')).toBeUndefined();
+      expect(headerValue(calls[0].init?.headers, 'session-id')).toBeUndefined();
+      expect(headerValue(calls[0].init?.headers, 'thread-id')).toBeUndefined();
+      expect(headerValue(calls[0].init?.headers, 'x-client-request-id')).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  test('positive maxOutputTokens is sent as max_output_tokens and invalid values are omitted', async () => {
+    const { calls, restore } = installJsonResponseFetch(codexTextResponse());
+    try {
+      await codexChat({
+        cfg: baseCodexCfg({ maxOutputTokens: 128 }),
+        messages: [{ role: 'user', content: 'max=128' }],
+      });
+      expect(parseRequestBody(calls[0]).max_output_tokens).toBe(128);
+
+      for (const maxOutputTokens of [0, -1, Number.POSITIVE_INFINITY, Number.NaN]) {
         await codexChat({
           cfg: baseCodexCfg({ maxOutputTokens }),
           messages: [{ role: 'user', content: `max=${String(maxOutputTokens)}` }],
         });
       }
 
-      for (const call of calls) {
+      for (const call of calls.slice(1)) {
         expect(parseRequestBody(call).max_output_tokens).toBeUndefined();
       }
     } finally {

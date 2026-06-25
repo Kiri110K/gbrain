@@ -2979,6 +2979,7 @@ const submit_agent: Operation = {
       allowed_tools: requestedTools,
       allowed_slug_prefixes: requestedSlugPrefixes,
       __owner_client_id: clientId,
+      __submit_agent_gateway_loop: true,
     };
     if (typeof p.model === 'string') jobData.model = p.model;
     if (boundSource) jobData.source_id = boundSource;

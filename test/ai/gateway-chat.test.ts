@@ -29,8 +29,8 @@ import { AIConfigError } from '../../src/core/ai/errors.ts';
 import { listRecipes, getRecipe } from '../../src/core/ai/recipes/index.ts';
 
 describe('chat touchpoint — recipe registry', () => {
-  test('all six chat-capable providers ship a chat touchpoint with supports_subagent_loop', () => {
-    const expected = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together'];
+  test('chat-capable providers ship a chat touchpoint with supports_subagent_loop', () => {
+    const expected = ['anthropic', 'openai', 'google', 'deepseek', 'groq', 'together', 'codex'];
     for (const id of expected) {
       const r = getRecipe(id);
       expect(r, `recipe missing: ${id}`).toBeDefined();
@@ -40,14 +40,13 @@ describe('chat touchpoint — recipe registry', () => {
     }
   });
 
-  test('only Anthropic claims supports_prompt_cache=true', () => {
+  test('Anthropic and Codex claim supports_prompt_cache=true', () => {
+    const expectedPromptCacheProviders = new Set(['anthropic', 'codex']);
     for (const r of listRecipes()) {
       if (!r.touchpoints.chat) continue;
-      if (r.id === 'anthropic') {
-        expect(r.touchpoints.chat.supports_prompt_cache).toBe(true);
-      } else {
-        expect(r.touchpoints.chat.supports_prompt_cache ?? false).toBe(false);
-      }
+      expect(r.touchpoints.chat.supports_prompt_cache ?? false, r.id).toBe(
+        expectedPromptCacheProviders.has(r.id),
+      );
     }
   });
 

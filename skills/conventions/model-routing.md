@@ -77,9 +77,10 @@ have separate model keys or tiers. Use `gbrain models` to inspect each surface.
   `[REDACTED]`.
 - Explicit env access tokens may expire. Refresh/auth-store reuse is
   future/opt-in behavior, not automatic.
-- Codex currently has `supports_prompt_cache:false`. Even though replay tests
-  approve it for tool-loop/subagent routing, model routing may warn about
-  degraded prompt-caching/cost semantics.
+- Codex participates in GBrain prompt-cache routing (`supports_prompt_cache:true`)
+  via `prompt_cache_key` and cache-locality headers. Codex model routing should
+  not emit the prompt-cache-unsupported warning; remaining cost caveats are
+  about subscription-backed usage versus OpenAI API token pricing.
 - Codex expansion profiles such as `models.expansion = codex:gpt-5.5-medium-fast`
   are for text query expansion only. Image OCR still needs a multimodal
   expansion model/provider and safely skips Codex.
@@ -95,11 +96,11 @@ gbrain models doctor             # 1-token probe to each configured model
 handler needs multi-turn tool calls that replay cleanly. Anthropic remains the
 default and uses prompt caching on system + tools. Codex profiles such as
 `codex:gpt-5.5-medium-fast` are also approved for tool-loop/subagent routing
-after replay tests, but currently have `supports_prompt_cache:false`, so
-cost/prompt-cache warnings are expected.
-Providers without `supports_subagent_loop` are refused or rerouted by the same
-enforcement layers: submit-time guard in `MinionQueue.add`, tier-resolution
-fallback in `resolveModel`, doctor `subagent_provider` check.
+after replay tests and route prompt-cache locality through `prompt_cache_key`
+plus Codex cache headers. Providers without `supports_subagent_loop` are refused
+or rerouted by the same enforcement layers: submit-time guard in
+`MinionQueue.add`, tier-resolution fallback in `resolveModel`, doctor
+`subagent_provider` check.
 
 When adding a new LLM call, route through `resolveModel()` with a tier —
 never hardcode a model string. The v0.31.6 chat default

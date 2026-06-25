@@ -6,7 +6,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { formatRecipeTable, envReady } from '../src/commands/providers.ts';
+import { formatRecipeTable, envReady, buildProviderExplainMatrix } from '../src/commands/providers.ts';
 import { listRecipes, getRecipe } from '../src/core/ai/recipes/index.ts';
 import type { Recipe } from '../src/core/ai/types.ts';
 
@@ -128,5 +128,45 @@ describe('formatRecipeTable', () => {
     expect(lines[2]).toContain('✓ ready');
     expect(lines[3]).toContain('zeroentropyai');
     expect(lines[3]).toContain('✗ missing ZEROENTROPY_API_KEY');
+  });
+});
+
+describe('providers explain matrix', () => {
+  test('JSON env_detected includes Codex booleans without secret values', async () => {
+    const secret = 'codex-secret-value';
+    const matrix = await buildProviderExplainMatrix({
+      env: {
+        GBRAIN_CODEX_ACCESS_TOKEN: secret,
+        CODEX_ACCESS_TOKEN: 'fallback-secret-value',
+        GBRAIN_CODEX_BASE_URL: 'https://codex-proxy.example.test',
+      } as NodeJS.ProcessEnv,
+      ollama: { reachable: false, models_endpoint_valid: false },
+      lmstudio: { reachable: false, models_endpoint_valid: false },
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    expect(matrix.env_detected.GBRAIN_CODEX_ACCESS_TOKEN).toBe(true);
+    expect(matrix.env_detected.CODEX_ACCESS_TOKEN).toBe(true);
+    expect(matrix.env_detected.GBRAIN_CODEX_BASE_URL).toBe(true);
+    const serialized = JSON.stringify(matrix);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain('fallback-secret-value');
+    expect(serialized).not.toContain('codex-proxy.example.test');
+  });
+
+  test('fallback CODEX_ACCESS_TOKEN makes Codex chat and expansion env_ready', async () => {
+    const matrix = await buildProviderExplainMatrix({
+      env: { CODEX_ACCESS_TOKEN: 'fallback-secret-value' } as NodeJS.ProcessEnv,
+      ollama: { reachable: false, models_endpoint_valid: false },
+      lmstudio: { reachable: false, models_endpoint_valid: false },
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const codexChat = matrix.options.find(o => o.id === 'codex:gpt-5.5' && o.touchpoint === 'chat');
+    const codexExpansion = matrix.options.find(o => o.id === 'codex:gpt-5.5' && o.touchpoint === 'expansion');
+    expect(codexChat?.env_ready).toBe(true);
+    expect(codexExpansion?.env_ready).toBe(true);
+    expect(codexChat?.pros.join(' ')).toMatch(/Codex|prompt-cache|tool/i);
+    expect(codexExpansion?.pros.join(' ')).toMatch(/Codex|text/i);
   });
 });

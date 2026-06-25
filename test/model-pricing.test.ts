@@ -82,6 +82,12 @@ describe('canonicalLookup — id normalization', () => {
     });
   });
 
+  test('non-priced Codex base/profile ids are not priced by fallback', () => {
+    expect(canonicalLookup('codex:gpt-5.4')).toBeUndefined();
+    expect(canonicalLookup('codex:gpt-5.4-mini-medium-fast')).toBeUndefined();
+    expect(canonicalLookup('codex:gpt-5.3-codex-spark')).toBeUndefined();
+  });
+
   test('slash-bearing model tail kept as exact key (together Llama)', () => {
     expect(canonicalLookup('together:meta-llama/Llama-3.3-70B-Instruct-Turbo')).toEqual({
       input: 0.88,
