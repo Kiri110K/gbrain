@@ -871,6 +871,7 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
     // ordering invariant").
     replayState: {
       priorMessages: priorChatMessages,
+      priorMessageIdxs: priorMessages.map(m => m.message_idx),
       priorTools: priorToolsByStableKey,
       nextTurnIdx: priorChatMessages.filter(m => m.role === 'assistant').length,
       nextMessageIdx,
@@ -906,6 +907,31 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       // because priorTools is keyed by the original UUID — the short-
       // circuit silently breaks and the tool re-executes. Pinned by
       // test/e2e/subagent-crash-replay-multi-provider.test.ts.
+      const existingRows = await engine.executeRaw<{
+        message_idx: number;
+        tool_use_id: string;
+        tool_name: string;
+        gbrain_tool_use_id: string | null;
+      }>(
+        `SELECT message_idx, tool_use_id, tool_name, gbrain_tool_use_id::text AS gbrain_tool_use_id
+           FROM subagent_tool_executions
+          WHERE job_id = $1
+            AND (
+              (message_idx = $2 AND ordinal IS NOT DISTINCT FROM $3::int)
+              OR tool_use_id = $4
+            )
+          ORDER BY CASE WHEN message_idx = $2 AND ordinal IS NOT DISTINCT FROM $3::int THEN 0 ELSE 1 END, id
+          LIMIT 1`,
+        [ctx.id, messageIdx, ordinal, providerToolCallId],
+      );
+      if (existingRows[0]) {
+        const existing = existingRows[0];
+        const gbrainToolUseId = existing.gbrain_tool_use_id
+          ?? legacyToolUseKey(ctx.id, existing.message_idx, existing.tool_use_id, existing.tool_name);
+        heartbeat('tool_called', { turn_idx: turnIdx, tool_name: toolName });
+        return { gbrainToolUseId };
+      }
+
       const candidateId = randomUUIDv7();
       const rows = await engine.executeRaw<{ gbrain_tool_use_id: string }>(
         `INSERT INTO subagent_tool_executions
@@ -921,6 +947,20 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       return { gbrainToolUseId };
     },
     onToolCallComplete: async (gbrainToolUseId, output) => {
+      const legacyKey = parseLegacyToolUseKey(gbrainToolUseId);
+      if (legacyKey) {
+        await engine.executeRaw(
+          `UPDATE subagent_tool_executions
+             SET status = 'complete', output = $1::text::jsonb, ended_at = now()
+           WHERE job_id = $2
+             AND message_idx = $3
+             AND tool_use_id = $4
+             AND tool_name = $5
+             AND gbrain_tool_use_id IS NULL`,
+          [JSON.stringify(output ?? null), legacyKey.jobId, legacyKey.messageIdx, legacyKey.toolUseId, legacyKey.toolName],
+        );
+        return;
+      }
       await engine.executeRaw(
         `UPDATE subagent_tool_executions
            SET status = 'complete', output = $1::text::jsonb, ended_at = now()
@@ -929,6 +969,20 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       );
     },
     onToolCallFailed: async (gbrainToolUseId, errorMsg) => {
+      const legacyKey = parseLegacyToolUseKey(gbrainToolUseId);
+      if (legacyKey) {
+        await engine.executeRaw(
+          `UPDATE subagent_tool_executions
+             SET status = 'failed', error = $1, ended_at = now()
+           WHERE job_id = $2
+             AND message_idx = $3
+             AND tool_use_id = $4
+             AND tool_name = $5
+             AND gbrain_tool_use_id IS NULL`,
+          [errorMsg, legacyKey.jobId, legacyKey.messageIdx, legacyKey.toolUseId, legacyKey.toolName],
+        );
+        return;
+      }
       await engine.executeRaw(
         `UPDATE subagent_tool_executions
            SET status = 'failed', error = $1, ended_at = now()
@@ -963,6 +1017,28 @@ async function runSubagentViaGateway(args: GatewayRunArgs): Promise<SubagentResu
       cache_read: result.totalUsage.cache_read_tokens,
       cache_create: result.totalUsage.cache_creation_tokens,
     },
+  };
+}
+
+interface LegacyToolUseKey {
+  jobId: number;
+  messageIdx: number;
+  toolUseId: string;
+  toolName: string;
+}
+
+function legacyToolUseKey(jobId: number, messageIdx: number, toolUseId: string, toolName: string): string {
+  return `legacy:${jobId}:${messageIdx}:${toolUseId}:${toolName}`;
+}
+
+function parseLegacyToolUseKey(key: string): LegacyToolUseKey | null {
+  const match = /^legacy:(\d+):(\d+):([^:]+):(.+)$/.exec(key);
+  if (!match) return null;
+  return {
+    jobId: Number(match[1]),
+    messageIdx: Number(match[2]),
+    toolUseId: match[3],
+    toolName: match[4],
   };
 }
 
@@ -1080,7 +1156,7 @@ async function loadPriorToolsV2(engine: BrainEngine, jobId: number): Promise<Pri
       // D5 legacy shim: derive a stable key from (job, msg_idx, tool_name, tool_use_id).
       // Pre-v81 rows don't have ordinal; the provider tool_use_id is stable
       // within a single Anthropic turn so it's safe as a fallback hash input.
-      : `legacy:${jobId}:${r.message_idx}:${r.tool_use_id}:${r.tool_name}`;
+      : legacyToolUseKey(jobId, r.message_idx as number, r.tool_use_id as string, r.tool_name as string);
     return {
       stableKey,
       status: r.status as 'pending' | 'complete' | 'failed',

@@ -287,6 +287,267 @@ describe('gateway.toolLoop Codex Responses transport', () => {
     ]);
   });
 
+  test('replay synthesizes a completed prior tool output before the first provider resume call', async () => {
+    responses = [finalTextResponse('Prior charge output accepted after resume.', { inputTokens: 9, outputTokens: 4 })];
+
+    let handlerCalls = 0;
+    let startCalls = 0;
+    const nonIdempotentHandler: ToolHandler = {
+      idempotent: false,
+      async execute() {
+        handlerCalls++;
+        return { charged: true, fresh: true };
+      },
+    };
+
+    const priorOutput = { charged: true, transactionId: 'txn_prior_resume_1' };
+    const result = await toolLoop({
+      initialMessages: [{ role: 'user', content: 'This should not be used when replay has prior messages.' }],
+      tools: [
+        {
+          name: 'charge_card',
+          description: 'Charge a card for an invoice.',
+          inputSchema: {
+            type: 'object',
+            properties: { invoiceId: { type: 'string' } },
+            required: ['invoiceId'],
+            additionalProperties: false,
+          },
+        },
+      ],
+      toolHandlers: new Map([['charge_card', nonIdempotentHandler]]),
+      onToolCallStart: async (turnIdx, messageIdx, ordinal, toolName, input, providerToolCallId) => {
+        startCalls++;
+        expect(turnIdx).toBe(0);
+        expect(messageIdx).toBe(1);
+        expect(ordinal).toBe(0);
+        expect(toolName).toBe('charge_card');
+        expect(input).toEqual({ invoiceId: 'inv_test_456' });
+        expect(providerToolCallId).toBe('call_charge_resume_1');
+        return { gbrainToolUseId: 'gb-charge-card-resume-1' };
+      },
+      replayState: {
+        priorMessages: [
+          { role: 'user', content: 'Charge the stored test invoice after resume.' },
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'call_charge_resume_1',
+                toolName: 'charge_card',
+                input: { invoiceId: 'inv_test_456' },
+              },
+            ],
+          },
+        ],
+        priorTools: new Map([
+          [
+            'gb-charge-card-resume-1',
+            {
+              status: 'complete' as const,
+              output: priorOutput,
+            },
+          ],
+        ]),
+        nextTurnIdx: 1,
+        nextMessageIdx: 2,
+      },
+    });
+
+    expect(result.stopReason).toBe('end');
+    expect(result.finalText).toBe('Prior charge output accepted after resume.');
+    expect(startCalls).toBe(1);
+    expect(handlerCalls).toBe(0);
+    expect(calls).toHaveLength(1);
+    const body = requestBody(calls[0]);
+    expect(body.input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'Charge the stored test invoice after resume.' }] },
+      {
+        type: 'function_call',
+        call_id: 'call_charge_resume_1',
+        name: 'charge_card',
+        arguments: '{"invoiceId":"inv_test_456"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_charge_resume_1',
+        output: '{"charged":true,"transactionId":"txn_prior_resume_1"}',
+      },
+    ]);
+  });
+
+  test('replay synthesizes completed prior tool outputs for every persisted assistant turn before resume', async () => {
+    responses = [finalTextResponse('Both prior charge outputs accepted after resume.', { inputTokens: 13, outputTokens: 6 })];
+
+    let handlerCalls = 0;
+    const startCalls: Array<{ turnIdx: number; messageIdx: number; ordinal: number; providerToolCallId: string }> = [];
+    const nonIdempotentHandler: ToolHandler = {
+      idempotent: false,
+      async execute() {
+        handlerCalls++;
+        return { charged: true, fresh: true };
+      },
+    };
+
+    const result = await toolLoop({
+      initialMessages: [{ role: 'user', content: 'This should not be used when replay has prior messages.' }],
+      tools: [
+        {
+          name: 'charge_card',
+          description: 'Charge a card for an invoice.',
+          inputSchema: {
+            type: 'object',
+            properties: { invoiceId: { type: 'string' } },
+            required: ['invoiceId'],
+            additionalProperties: false,
+          },
+        },
+      ],
+      toolHandlers: new Map([['charge_card', nonIdempotentHandler]]),
+      onToolCallStart: async (turnIdx, messageIdx, ordinal, toolName, input, providerToolCallId) => {
+        expect(toolName).toBe('charge_card');
+        startCalls.push({ turnIdx, messageIdx, ordinal, providerToolCallId });
+        return { gbrainToolUseId: `gb-${providerToolCallId}` };
+      },
+      replayState: {
+        priorMessages: [
+          { role: 'user', content: 'Charge both stored test invoices after resume.' },
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'call_charge_resume_a',
+                toolName: 'charge_card',
+                input: { invoiceId: 'inv_test_a' },
+              },
+            ],
+          },
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'call_charge_resume_b',
+                toolName: 'charge_card',
+                input: { invoiceId: 'inv_test_b' },
+              },
+            ],
+          },
+        ],
+        priorMessageIdxs: [0, 1, 2],
+        priorTools: new Map([
+          ['gb-call_charge_resume_a', { status: 'complete' as const, output: { charged: true, transactionId: 'txn_prior_a' } }],
+          ['gb-call_charge_resume_b', { status: 'complete' as const, output: { charged: true, transactionId: 'txn_prior_b' } }],
+        ]),
+        nextTurnIdx: 2,
+        nextMessageIdx: 3,
+      },
+    });
+
+    expect(result.stopReason).toBe('end');
+    expect(result.finalText).toBe('Both prior charge outputs accepted after resume.');
+    expect(handlerCalls).toBe(0);
+    expect(startCalls).toEqual([
+      { turnIdx: 0, messageIdx: 1, ordinal: 0, providerToolCallId: 'call_charge_resume_a' },
+      { turnIdx: 1, messageIdx: 2, ordinal: 0, providerToolCallId: 'call_charge_resume_b' },
+    ]);
+
+    expect(calls).toHaveLength(1);
+    const body = requestBody(calls[0]);
+    expect(body.input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'Charge both stored test invoices after resume.' }] },
+      {
+        type: 'function_call',
+        call_id: 'call_charge_resume_a',
+        name: 'charge_card',
+        arguments: '{"invoiceId":"inv_test_a"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_charge_resume_a',
+        output: '{"charged":true,"transactionId":"txn_prior_a"}',
+      },
+      {
+        type: 'function_call',
+        call_id: 'call_charge_resume_b',
+        name: 'charge_card',
+        arguments: '{"invoiceId":"inv_test_b"}',
+      },
+      {
+        type: 'function_call_output',
+        call_id: 'call_charge_resume_b',
+        output: '{"charged":true,"transactionId":"txn_prior_b"}',
+      },
+    ]);
+  });
+
+  test('replay returns persisted terminal assistant text without another provider call', async () => {
+    responses = [];
+
+    let handlerCalls = 0;
+    let startCalls = 0;
+    const nonIdempotentHandler: ToolHandler = {
+      idempotent: false,
+      async execute() {
+        handlerCalls++;
+        return { charged: true, fresh: true };
+      },
+    };
+
+    const result = await toolLoop({
+      initialMessages: [{ role: 'user', content: 'This should not be used when replay has prior messages.' }],
+      tools: [
+        {
+          name: 'charge_card',
+          description: 'Charge a card for an invoice.',
+          inputSchema: {
+            type: 'object',
+            properties: { invoiceId: { type: 'string' } },
+            required: ['invoiceId'],
+            additionalProperties: false,
+          },
+        },
+      ],
+      toolHandlers: new Map([['charge_card', nonIdempotentHandler]]),
+      onToolCallStart: async (_turnIdx, _messageIdx, _ordinal, _toolName, _input, providerToolCallId) => {
+        startCalls++;
+        expect(providerToolCallId).toBe('call_charge_terminal_1');
+        return { gbrainToolUseId: 'gb-call_charge_terminal_1' };
+      },
+      replayState: {
+        priorMessages: [
+          { role: 'user', content: 'Charge the stored invoice.' },
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool-call',
+                toolCallId: 'call_charge_terminal_1',
+                toolName: 'charge_card',
+                input: { invoiceId: 'inv_terminal_1' },
+              },
+            ],
+          },
+          { role: 'assistant', content: [{ type: 'text', text: 'Persisted final answer from before crash.' }] },
+        ],
+        priorMessageIdxs: [0, 1, 2],
+        priorTools: new Map([
+          ['gb-call_charge_terminal_1', { status: 'complete' as const, output: { charged: true, transactionId: 'txn_terminal_1' } }],
+        ]),
+        nextTurnIdx: 2,
+        nextMessageIdx: 3,
+      },
+    });
+
+    expect(result.stopReason).toBe('end');
+    expect(result.finalText).toBe('Persisted final answer from before crash.');
+    expect(startCalls).toBe(1);
+    expect(handlerCalls).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
   test('incomplete max_output_tokens response returns length instead of successful end', async () => {
     responses = [
       {

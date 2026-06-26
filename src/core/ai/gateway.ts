@@ -3156,6 +3156,13 @@ export interface ToolHandler {
  */
 export interface ToolLoopReplayState {
   priorMessages: ChatMessage[];
+  /**
+   * Optional persisted message_idx values parallel to priorMessages. Subagent
+   * replay persists assistant rows but keeps synthetic tool-result user messages
+   * in-memory only, so DB message_idx can have gaps (0, 1, 3, ...). When present,
+   * use these values for replay reconciliation instead of array positions.
+   */
+  priorMessageIdxs?: number[];
   priorTools: Map<string, { status: 'pending' | 'complete' | 'failed'; output?: unknown; error?: string }>;
   nextTurnIdx: number;
   nextMessageIdx: number;
@@ -3292,8 +3299,179 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
   }
   let turnIdx = opts.replayState?.nextTurnIdx ?? 0;
   let messageIdx = opts.replayState?.nextMessageIdx ?? 0;
+  const replayMessageIdxs = opts.replayState?.priorMessageIdxs;
+  if (replayMessageIdxs && replayMessageIdxs.length > 0) {
+    const maxPriorMessageIdx = replayMessageIdxs.reduce(
+      (max, idx) => (Number.isFinite(idx) ? Math.max(max, idx) : max),
+      -1,
+    );
+    if (maxPriorMessageIdx >= 0) {
+      messageIdx = Math.max(messageIdx, maxPriorMessageIdx + 1);
+    }
+  }
   let finalText = '';
   let stopReason: ToolLoopStopReason = 'end';
+
+  // Crash-replay can resume after one or more assistant tool-call messages were
+  // persisted and after their tool rows were settled, but before the synthetic
+  // tool-result user messages were fed back to the model. Rebuild those
+  // in-memory user messages before the first provider call; otherwise
+  // Responses/Codex sees dangling function_call entries with no outputs.
+  if (opts.replayState && messages.length > 0) {
+    const persistedMessageIdxs = messages.map((_message, idx) => replayMessageIdxs?.[idx] ?? idx);
+    let replayAssistantTurnIdx = 0;
+
+    for (let replayMessageArrayIdx = 0; replayMessageArrayIdx < messages.length; replayMessageArrayIdx++) {
+      const assistantMessage = messages[replayMessageArrayIdx]!;
+      if (assistantMessage.role !== 'assistant') continue;
+
+      const replayTurnIdx = replayAssistantTurnIdx++;
+      const assistantBlocks = Array.isArray(assistantMessage.content) ? assistantMessage.content : [];
+      const toolCalls = assistantBlocks.filter(
+        (b): b is { type: 'tool-call'; toolCallId: string; toolName: string; input: unknown } => b.type === 'tool-call',
+      );
+      if (toolCalls.length === 0) continue;
+
+      const nextMessage = messages[replayMessageArrayIdx + 1];
+      const nextBlocks = nextMessage?.role === 'user' && Array.isArray(nextMessage.content)
+        ? nextMessage.content
+        : [];
+      const existingToolResults = nextBlocks.filter(
+        (b): b is { type: 'tool-result'; toolCallId: string; toolName: string; output: unknown; isError?: boolean } => b.type === 'tool-result',
+      );
+      const existingToolResultsByCallId = new Map(existingToolResults.map(block => [block.toolCallId, block]));
+      const danglingToolCalls = toolCalls.filter(call => !existingToolResultsByCallId.has(call.toolCallId));
+      if (danglingToolCalls.length === 0) continue;
+
+      const persistedAssistantMessageIdx = persistedMessageIdxs[replayMessageArrayIdx] ?? replayMessageArrayIdx;
+      const synthesizedToolResultsByCallId = new Map<string, ChatBlock>();
+
+      for (const call of danglingToolCalls) {
+        const callIdx = toolCalls.findIndex(candidate => candidate.toolCallId === call.toolCallId);
+        const ordinal = callIdx >= 0 ? callIdx : 0;
+        const handler = handlers.get(call.toolName);
+        const { gbrainToolUseId } = (await opts.onToolCallStart?.(
+          replayTurnIdx,
+          persistedAssistantMessageIdx,
+          ordinal,
+          call.toolName,
+          call.input,
+          call.toolCallId,
+        )) ?? { gbrainToolUseId: `inline-replay-${persistedAssistantMessageIdx}-${ordinal}` };
+        const prior = opts.replayState.priorTools.get(gbrainToolUseId);
+
+        if (prior?.status === 'complete') {
+          synthesizedToolResultsByCallId.set(call.toolCallId, {
+            type: 'tool-result',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: prior.output,
+          });
+          opts.onHeartbeat?.('tool_replay_complete', { turn_idx: replayTurnIdx, tool_name: call.toolName });
+          continue;
+        }
+        if (prior?.status === 'failed') {
+          synthesizedToolResultsByCallId.set(call.toolCallId, {
+            type: 'tool-result',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: prior.error ?? 'tool failed',
+            isError: true,
+          });
+          opts.onHeartbeat?.('tool_replay_failed', { turn_idx: replayTurnIdx, tool_name: call.toolName });
+          continue;
+        }
+        if (!handler) {
+          synthesizedToolResultsByCallId.set(call.toolCallId, {
+            type: 'tool-result',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: `tool "${call.toolName}" is not in the registry for this subagent`,
+            isError: true,
+          });
+          opts.onHeartbeat?.('tool_failed', { turn_idx: replayTurnIdx, tool_name: call.toolName, error: 'not_registered' });
+          continue;
+        }
+        if (!handler.idempotent) {
+          stopReason = 'unrecoverable';
+          const state = prior?.status ?? 'missing';
+          throw new Error(
+            `non-idempotent tool "${call.toolName}" ${state} on resume; gbrainToolUseId=${gbrainToolUseId} — cannot safely re-run`,
+          );
+        }
+
+        await classifyGatewayGuardrail({
+          hook: 'ai_gateway.tool_input',
+          content: stringifyGuardrailValue({ toolName: call.toolName, input: call.input }),
+          metadata: {
+            turn_idx: replayTurnIdx,
+            call_idx: ordinal,
+            tool_name: call.toolName,
+            replay: true,
+          },
+        });
+
+        opts.onHeartbeat?.('tool_called', { turn_idx: replayTurnIdx, tool_name: call.toolName });
+        try {
+          const output = await handler.execute(call.input, opts.abortSignal ?? new AbortController().signal);
+          await opts.onToolCallComplete?.(gbrainToolUseId, output);
+          synthesizedToolResultsByCallId.set(call.toolCallId, {
+            type: 'tool-result',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output,
+          });
+          opts.onHeartbeat?.('tool_result', { turn_idx: replayTurnIdx, tool_name: call.toolName });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          await opts.onToolCallFailed?.(gbrainToolUseId, errMsg);
+          synthesizedToolResultsByCallId.set(call.toolCallId, {
+            type: 'tool-result',
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            output: errMsg,
+            isError: true,
+          });
+          opts.onHeartbeat?.('tool_failed', { turn_idx: replayTurnIdx, tool_name: call.toolName, error: errMsg });
+        }
+      }
+
+      if (synthesizedToolResultsByCallId.size === 0) continue;
+
+      const orderedToolResultBlocks = toolCalls
+        .map(call => existingToolResultsByCallId.get(call.toolCallId) ?? synthesizedToolResultsByCallId.get(call.toolCallId))
+        .filter((block): block is ChatBlock => Boolean(block));
+      const otherNextUserBlocks = nextBlocks.filter(block => block.type !== 'tool-result');
+      const userMessageIdx = messageIdx++;
+      void userMessageIdx;
+
+      if (existingToolResults.length > 0 && nextMessage?.role === 'user') {
+        messages[replayMessageArrayIdx + 1] = {
+          role: 'user',
+          content: [...orderedToolResultBlocks, ...otherNextUserBlocks],
+        };
+      } else {
+        messages.splice(replayMessageArrayIdx + 1, 0, { role: 'user', content: orderedToolResultBlocks });
+        persistedMessageIdxs.splice(replayMessageArrayIdx + 1, 0, -1);
+      }
+    }
+  }
+
+  if (opts.replayState && messages.length > 0) {
+    const lastReplayMessage = messages[messages.length - 1]!;
+    const lastReplayBlocks = Array.isArray(lastReplayMessage.content) ? lastReplayMessage.content : [];
+    const lastReplayHasToolCalls = lastReplayBlocks.some(block => block.type === 'tool-call');
+    if (lastReplayMessage.role === 'assistant' && !lastReplayHasToolCalls) {
+      finalText = typeof lastReplayMessage.content === 'string'
+        ? lastReplayMessage.content
+        : lastReplayBlocks
+          .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+          .map(block => block.text)
+          .join('');
+      stopReason = 'end';
+      return { finalText, totalTurns: turnIdx, totalUsage, stopReason, messages };
+    }
+  }
 
   while (turnIdx < maxTurns) {
     if (opts.abortSignal?.aborted) {

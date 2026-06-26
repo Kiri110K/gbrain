@@ -406,6 +406,58 @@ describe('SIGKILL crash-replay reconciliation across provider matrix (v0.38 LOAD
     });
   });
 
+  describe('legacy idempotent pending tool replay', () => {
+    it('settles a v1 legacy pending row after safe idempotent re-execution', async () => {
+      __setChatTransportForTests(async () => ({
+        text: 'search replay completed',
+        blocks: [{ type: 'text', text: 'search replay completed' }] as ChatBlock[],
+        stopReason: 'end',
+        usage: { input_tokens: 22, output_tokens: 4, cache_read_tokens: 0, cache_creation_tokens: 0 },
+        model: 'anthropic:claude-sonnet-4-6',
+        providerId: 'anthropic',
+      } satisfies ChatResult));
+
+      const executions: Array<{ name: string; input: unknown }> = [];
+      const tools = makeStubTools(executions);
+      const handler = buildHandler(tools);
+
+      const jobRows = await engine.executeRaw<{ id: number }>(
+        `INSERT INTO minion_jobs (name, status, data, queue, priority, created_at)
+         VALUES ('subagent', 'active', '{}'::jsonb, 'default', 0, now())
+         RETURNING id`,
+      );
+      const jobId = jobRows[0].id;
+
+      await engine.executeRaw(
+        `INSERT INTO subagent_messages
+           (job_id, message_idx, role, content_blocks, model)
+         VALUES ($1, 0, 'user', '[{"type":"text","text":"search"}]'::jsonb, NULL),
+                ($1, 1, 'assistant', $2::jsonb, 'anthropic:claude-sonnet-4-6')`,
+        [jobId, JSON.stringify([{ type: 'tool_use', id: 'toolu_v1_pending', name: 'search', input: { q: 'legacy-pending' } }])],
+      );
+      await engine.executeRaw(
+        `INSERT INTO subagent_tool_executions
+           (job_id, message_idx, tool_use_id, tool_name, input, status, schema_version)
+         VALUES ($1, 1, 'toolu_v1_pending', 'search', $2::jsonb, 'pending', 1)`,
+        [jobId, JSON.stringify({ q: 'legacy-pending' })],
+      );
+
+      const ctx = await makeCrashedCtx(jobId, 'search', 'anthropic:claude-sonnet-4-6');
+      const result = await handler(ctx);
+
+      expect(result.result).toBe('search replay completed');
+      expect(executions).toEqual([{ name: 'search', input: { q: 'legacy-pending' } }]);
+
+      const finalRows = await engine.executeRaw<Record<string, unknown>>(
+        `SELECT status, output FROM subagent_tool_executions WHERE job_id = $1`,
+        [jobId],
+      );
+      expect(finalRows).toHaveLength(1);
+      expect(finalRows[0].status).toBe('complete');
+      expect(finalRows[0].output).toEqual({ results: [{ slug: 'wiki/foo' }] });
+    });
+  });
+
   describe('failed tool on prior turn — replay surfaces the error to the LLM', () => {
     it('prior failed tool replays as is_error result, loop completes', async () => {
       const tools = makeStubTools([]);
