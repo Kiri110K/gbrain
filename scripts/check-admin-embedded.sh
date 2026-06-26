@@ -22,9 +22,19 @@ if [ ! -d admin/dist ]; then
   exit 0
 fi
 
-bun run scripts/build-admin-embedded.ts > /dev/null
+fingerprint_embedded() {
+  if [ -f src/admin-embedded.ts ]; then
+    sha256sum src/admin-embedded.ts | cut -d' ' -f1
+  else
+    echo missing
+  fi
+}
 
-if ! git diff --exit-code -- src/admin-embedded.ts; then
+before_hash="$(fingerprint_embedded)"
+bun run scripts/build-admin-embedded.ts > /dev/null
+after_hash="$(fingerprint_embedded)"
+
+if [ "$before_hash" != "$after_hash" ]; then
   echo ""
   echo "[check:admin-embedded] src/admin-embedded.ts is out of sync with admin/dist/."
   echo "  Fix: bun run build:admin && bun run build:admin-embedded"

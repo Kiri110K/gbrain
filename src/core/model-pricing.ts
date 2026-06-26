@@ -23,9 +23,9 @@
  * regression trip-wire if anyone later re-hardcodes a view back into a duplicate)
  * and that the cross-modal panel models are all present in canonical.
  *
- * Prices verified 2026-06-03 against published provider pricing:
+ * Prices verified 2026-06-26 against published provider pricing:
  *   - Anthropic: https://platform.claude.com/docs/en/about-claude/models/overview
- *   - OpenAI:    https://openai.com/api/pricing
+ *   - OpenAI:    https://platform.openai.com/docs/pricing
  *   - Google:    https://ai.google.dev/gemini-api/docs/pricing
  * The dream-budget audit JSONL snapshots the rate per call, so historical
  * estimates stay reproducible even after this table changes.
@@ -71,14 +71,30 @@ export const CANONICAL_PRICING: Record<string, ModelPricing> = {
   'anthropic:claude-3-5-haiku-20241022':  { input:  0.80, output:  4.00 },
 
   // ── OpenAI ─────────────────────────────────────────────────────────────
-  'openai:gpt-4o':                        { input:  2.50, output: 10.00 },
-  'openai:gpt-4o-mini':                   { input:  0.15, output:  0.60 },
-  'openai:gpt-5':                         { input:  5.00, cachedInput: 0.50, output: 20.00 },
-  // GPT-5.5 short-context (<272K input) list price; cached input is 90% cheaper.
-  'openai:gpt-5.5':                       { input:  5.00, cachedInput: 0.50, output: 30.00 },
+  // Standard API pricing from https://platform.openai.com/docs/pricing.
+  // Cached input is the published prompt-cache rate where listed.
+  'openai:gpt-5.5':                       { input:  5.00, cachedInput: 0.50,  output:  30.00 },
+  'openai:gpt-5.5-pro':                   { input: 30.00,                    output: 180.00 },
+  'openai:gpt-5.4':                       { input:  2.50, cachedInput: 0.25,  output:  15.00 },
+  'openai:gpt-5.4-mini':                  { input:  0.75, cachedInput: 0.075, output:   4.50 },
+  'openai:gpt-5.4-nano':                  { input:  0.20, cachedInput: 0.02,  output:   1.25 },
+  'openai:gpt-5.4-pro':                   { input: 30.00,                    output: 180.00 },
+  'openai:gpt-5.2':                       { input:  1.75, cachedInput: 0.175, output:  14.00 },
+  'openai:gpt-5.2-pro':                   { input: 21.00,                    output: 168.00 },
+  'openai:gpt-5.1':                       { input:  1.25, cachedInput: 0.125, output:  10.00 },
+  'openai:gpt-5':                         { input:  1.25, cachedInput: 0.125, output:  10.00 },
+  'openai:gpt-5-mini':                    { input:  0.25, cachedInput: 0.025, output:   2.00 },
+  'openai:gpt-5-nano':                    { input:  0.05, cachedInput: 0.005, output:   0.40 },
+  'openai:gpt-5-pro':                     { input: 15.00,                    output: 120.00 },
+  'openai:gpt-4.1':                       { input:  2.00, cachedInput: 0.50,  output:   8.00 },
+  'openai:gpt-4.1-mini':                  { input:  0.40, cachedInput: 0.10,  output:   1.60 },
+  'openai:gpt-4.1-nano':                  { input:  0.10, cachedInput: 0.025, output:   0.40 },
+  'openai:gpt-4o':                        { input:  2.50, cachedInput: 1.25,  output:  10.00 },
+  'openai:gpt-4o-2024-05-13':             { input:  5.00,                    output:  15.00 },
+  'openai:gpt-4o-mini':                   { input:  0.15, cachedInput: 0.075, output:   0.60 },
   // Codex/ChatGPT OAuth backend uses OpenAI-family Responses models; keep the
   // base Codex provider id priced so scoped slugs can lower through it.
-  'codex:gpt-5.5':                        { input:  5.00, cachedInput: 0.50, output: 30.00 },
+  'codex:gpt-5.5':                        { input:  5.00, cachedInput: 0.50,  output:  30.00 },
 
   // ── Google ─────────────────────────────────────────────────────────────
   'google:gemini-1.5-pro':                { input:  1.25, output:  5.00 },

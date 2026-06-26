@@ -39,5 +39,6 @@ export/
 test/fixtures/pglite-snapshot.tar
 test/fixtures/pglite-snapshot.version
 
-# Private brain reports — never check these in (per CLAUDE.md privacy rule)
+# Private brain reports and agent-local plans — never check these in (per CLAUDE.md privacy rule)
 reports/network-intelligence/
+.hermes/

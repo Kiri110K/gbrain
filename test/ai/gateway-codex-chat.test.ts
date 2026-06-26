@@ -156,8 +156,21 @@ describe('gateway.chat Codex routing', () => {
     expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' });
     expect(body.store).toBe(false);
     expect(body.service_tier).toBe('priority');
+    expect(body.max_output_tokens).toBeUndefined();
     expect(body.tool_choice).toBe('auto');
     expect(body.parallel_tool_calls).toBe(true);
+  });
+
+  test('omits max_output_tokens on default Codex chat requests', async () => {
+    configureGateway({
+      chat_model: 'codex:gpt-5.5',
+      env: { GBRAIN_CODEX_ACCESS_TOKEN: CODEX_TOKEN },
+    });
+
+    await chat({ messages: [{ role: 'user', content: 'Use the default token ceiling.' }] });
+
+    const body = bodyOf(calls[0]);
+    expect(body.max_output_tokens).toBeUndefined();
   });
 
   test('cacheSystem forwards prompt_cache_key to Codex Responses', async () => {

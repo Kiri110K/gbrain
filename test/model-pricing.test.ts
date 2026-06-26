@@ -51,6 +51,14 @@ describe('CANONICAL_PRICING — table integrity', () => {
       CANONICAL_PRICING['google:gemini-2.0-flash'],
     );
   });
+
+  test('OpenAI GPT-5 family matches official API pricing', () => {
+    expect(CANONICAL_PRICING['openai:gpt-5.5']).toEqual({ input: 5.0, cachedInput: 0.5, output: 30.0 });
+    expect(CANONICAL_PRICING['openai:gpt-5.2']).toEqual({ input: 1.75, cachedInput: 0.175, output: 14.0 });
+    expect(CANONICAL_PRICING['openai:gpt-5.1']).toEqual({ input: 1.25, cachedInput: 0.125, output: 10.0 });
+    expect(CANONICAL_PRICING['openai:gpt-5']).toEqual({ input: 1.25, cachedInput: 0.125, output: 10.0 });
+    expect(CANONICAL_PRICING['openai:gpt-4o-mini']).toEqual({ input: 0.15, cachedInput: 0.075, output: 0.6 });
+  });
 });
 
 describe('canonicalLookup — id normalization', () => {

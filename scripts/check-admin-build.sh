@@ -7,7 +7,9 @@
 # the loadApiKeys reference because the bash test pipeline doesn't run
 # Vite builds. This script runs `bun install` in admin/ to ensure
 # react/vite/etc. are present, then runs Vite's build which performs
-# TypeScript type-check + bundle.
+# TypeScript type-check + bundle. After the bundle exists, it also
+# regenerates src/admin-embedded.ts and fails if the committed embedded
+# manifest is stale.
 #
 # Skip with GBRAIN_SKIP_ADMIN_BUILD=1 (e.g., for fast inner-loop test
 # runs that don't touch admin/src). Production CI must NOT skip.
@@ -33,3 +35,25 @@ bun install --silent >/dev/null 2>&1 || bun install
 # Build runs `tsc -b && vite build`. Output to admin/dist/. Exit non-zero
 # on TS error, missing symbol, or Vite bundling error.
 bun run build
+
+cd ..
+
+fingerprint_embedded() {
+  if [ -f src/admin-embedded.ts ]; then
+    sha256sum src/admin-embedded.ts | cut -d' ' -f1
+  else
+    echo missing
+  fi
+}
+
+before_hash="$(fingerprint_embedded)"
+bun run scripts/build-admin-embedded.ts > /dev/null
+after_hash="$(fingerprint_embedded)"
+
+if [ "$before_hash" != "$after_hash" ]; then
+  echo ""
+  echo "[check:admin-build] src/admin-embedded.ts is out of sync with admin/dist/."
+  echo "  Fix: bun run build:admin"
+  echo "  Then re-commit the regenerated src/admin-embedded.ts."
+  exit 1
+fi

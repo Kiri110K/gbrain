@@ -314,6 +314,46 @@ describe('runSubagentViaGateway (v0.38 Slice 1 — full handler path through gat
     expect(String(toolRows[0].error)).toContain('intentional tool failure');
   });
 
+  it('replay of now-unregistered tool marks the persisted tool row failed', async () => {
+    __setChatTransportForTests(async () => ({
+      text: 'missing tool was reported',
+      blocks: [{ type: 'text', text: 'missing tool was reported' }] as ChatBlock[],
+      stopReason: 'end',
+      usage: { input_tokens: 5, output_tokens: 2, cache_read_tokens: 0, cache_creation_tokens: 0 },
+      model: 'anthropic:claude-sonnet-4-6',
+      providerId: 'anthropic',
+    } satisfies ChatResult));
+
+    const handler = buildHandler([]);
+    const { jobId, ctx } = await makeFakeJob({ prompt: 'resume with stale tool', model: 'anthropic:claude-sonnet-4-6' });
+    await engine.executeRaw(
+      `INSERT INTO subagent_messages (job_id, message_idx, role, content_blocks)
+       VALUES ($1, 0, 'user', $2::text::jsonb)`,
+      [jobId, JSON.stringify([{ type: 'text', text: 'resume with stale tool' }])],
+    );
+    await engine.executeRaw(
+      `INSERT INTO subagent_messages (job_id, message_idx, role, content_blocks, model)
+       VALUES ($1, 1, 'assistant', $2::text::jsonb, 'anthropic:claude-sonnet-4-6')`,
+      [
+        jobId,
+        JSON.stringify([
+          { type: 'tool-call', toolCallId: 'stale-tool-call', toolName: 'ghost_tool', input: { q: 'old' } },
+        ]),
+      ],
+    );
+
+    const result = await handler(ctx);
+
+    expect(result.result).toBe('missing tool was reported');
+    const rows = await engine.executeRaw<Record<string, unknown>>(
+      `SELECT status, error FROM subagent_tool_executions WHERE job_id = $1`,
+      [jobId],
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].status).toBe('failed');
+    expect(String(rows[0].error)).toContain('not in the registry');
+  });
+
   it('max_turns: loop terminates when budget exhausted', async () => {
     // Always return tool_calls — never end. Should hit max_turns cap (default 20 in subagent.ts).
     __setChatTransportForTests(async () => ({

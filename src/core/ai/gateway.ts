@@ -2863,6 +2863,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
   }
   const estimatedInputTokens = estimateChatInputTokens(opts);
   const maxOutputTokens = opts.maxTokens ?? 4096;
+  const explicitMaxOutputTokens = opts.maxTokens;
 
   // TX5: reserve BEFORE the provider call. Throws BudgetExhausted on cost,
   // runtime, or no_pricing (when cap is set). Pre-resolution model id is
@@ -3022,7 +3023,7 @@ export async function chat(opts: ChatOpts): Promise<ChatResult> {
           profileModel: displayModelId,
           runtime: codexRuntime,
           promptCacheKey: useCache ? opts.promptCacheKey : undefined,
-          maxOutputTokens,
+          maxOutputTokens: explicitMaxOutputTokens,
           signal: withDefaultTimeout(opts.abortSignal, AI_CHAT_TIMEOUT_MS),
         },
         system: opts.system,
@@ -3261,7 +3262,7 @@ export interface ToolLoopResult {
  */
 export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
   const maxTurns = opts.maxTurns ?? 20;
-  const maxTokens = opts.maxTokens ?? 4096;
+  const maxTokens = opts.maxTokens;
   const loopModel = opts.model ?? getChatModel();
   const capabilityVerdict = classifyCapabilities(loopModel);
   if (capabilityVerdict === 'unusable:no_tools') {
@@ -3382,11 +3383,13 @@ export async function toolLoop(opts: ToolLoopOpts): Promise<ToolLoopResult> {
           continue;
         }
         if (!handler) {
+          const errMsg = `tool "${call.toolName}" is not in the registry for this subagent`;
+          await opts.onToolCallFailed?.(gbrainToolUseId, errMsg);
           synthesizedToolResultsByCallId.set(call.toolCallId, {
             type: 'tool-result',
             toolCallId: call.toolCallId,
             toolName: call.toolName,
-            output: `tool "${call.toolName}" is not in the registry for this subagent`,
+            output: errMsg,
             isError: true,
           });
           opts.onHeartbeat?.('tool_failed', { turn_idx: replayTurnIdx, tool_name: call.toolName, error: 'not_registered' });
