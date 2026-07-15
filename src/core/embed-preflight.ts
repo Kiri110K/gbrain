@@ -100,6 +100,14 @@ export function formatEmbeddingCredsError(d: EmbeddingDiagnosis): string {
         '  Or run with --no-embed to import-only and embed later.',
       ].join('\n');
 
+    case 'auth_unavailable':
+      return [
+        `Embedding model "${d.model}" is not authenticated.`,
+        '',
+        `  ${d.hint ?? 'Run `gbrain auth login`.'}`,
+        '  Or run with --no-embed to import-only and embed later.',
+      ].join('\n');
+
     case 'missing_env': {
       const envs = d.missingEnvVars.join(', ');
       const primaryEnv = d.missingEnvVars[0];

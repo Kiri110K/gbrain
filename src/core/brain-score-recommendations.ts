@@ -31,6 +31,7 @@ export const HOSTED_EMBED_KEY_CONFIG: Record<string, string> = {
 /**
  * v0.40.x: is the configured embedding provider usable for the remediation
  * planner? Recipe-aware:
+ *   - external OAuth/file credentials use `recipe.authReady(env)`.
  *   - empty `auth_env.required` (ollama, llama-server, ...) ⇒ local, no hosted
  *     key needed ⇒ true.
  *   - hosted (openai, zeroentropyai, voyage, google, ...) ⇒ true iff every
@@ -50,6 +51,7 @@ export const HOSTED_EMBED_KEY_CONFIG: Record<string, string> = {
 export function embeddingProviderConfigured(
   embeddingModel: string | undefined,
   resolveKey: (envVar: string) => boolean,
+  env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (!embeddingModel) return false;
   let providerId: string;
@@ -60,6 +62,8 @@ export function embeddingProviderConfigured(
   }
   const recipe = getRecipe(providerId);
   if (!recipe?.touchpoints?.embedding) return false;
+  const externalAuth = recipe.authReady?.(env);
+  if (externalAuth) return externalAuth.ready;
   const required = recipe.auth_env?.required ?? [];
   return required.length === 0 ? true : required.every(resolveKey);
 }

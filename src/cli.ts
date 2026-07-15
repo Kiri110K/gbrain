@@ -51,6 +51,7 @@ const CLI_ONLY = new Set(['init', 'reinit-pglite', 'upgrade', 'post-upgrade', 'c
 const CLI_ONLY_SELF_HELP = new Set([
   'upgrade', 'post-upgrade', 'check-update',
   'embed', 'config',
+  'auth',
   'skillpack', 'skillpack-check',
   'integrations', 'friction',
   'frontmatter', 'check-resolvable',
@@ -1390,7 +1391,7 @@ async function handleCliOnly(command: string, args: string[]) {
           ? Number(process.env.GBRAIN_EMBEDDING_DIMENSIONS) : undefined,
       } as GBrainConfig);
       const { configureGateway } = await import('./core/ai/gateway.ts');
-      configureGateway(buildGatewayConfig(config));
+      configureGateway(await buildGatewayConfigWithAuth(config));
     }
     await runEvalLongMemEval(args.slice(1));
     return;
@@ -2073,8 +2074,8 @@ async function dispatchReadOnlyCommand(engine: BrainEngine, command: string, arg
 // re-exported here for back-compat with `test/ai/build-gateway-config.test.ts`
 // and other callers that import it from `../../src/cli.ts`. Imported (not just
 // re-exported) so cli.ts's own connectEngine() call sites bind it locally.
-import { buildGatewayConfig } from './core/ai/build-gateway-config.ts';
-export { buildGatewayConfig };
+import { buildGatewayConfig, buildGatewayConfigWithAuth } from './core/ai/build-gateway-config.ts';
+export { buildGatewayConfig, buildGatewayConfigWithAuth };
 
 async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngine> {
   const config = loadConfig();
@@ -2086,7 +2087,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
   // Configure the AI gateway BEFORE engine connect — initSchema needs embedding dims.
   // Env is read once here; the gateway never reads process.env at call time (Codex C3).
   const { configureGateway } = await import('./core/ai/gateway.ts');
-  configureGateway(buildGatewayConfig(config));
+  configureGateway(await buildGatewayConfigWithAuth(config));
 
   const { createEngine } = await import('./core/engine-factory.ts');
   const engine = await createEngine(toEngineConfig(config));
@@ -2161,7 +2162,7 @@ async function connectEngine(opts?: { probeOnly?: boolean }): Promise<BrainEngin
       // was set); that coupled the gate to the field set and would silently
       // miss future DB-mutable gateway fields. One extra cache+shrinkState
       // clear per startup is microseconds, no hot path.
-      configureGateway(buildGatewayConfig(merged));
+      configureGateway(await buildGatewayConfigWithAuth(merged));
     }
     // v0.31.12: re-resolve gateway defaults through resolveModel so
     // `models.tier.*` and `models.default` overrides apply to expansion +

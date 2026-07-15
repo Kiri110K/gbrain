@@ -149,3 +149,50 @@ describe('findEnvKeyTypos', () => {
     expect(got.find(t => t.userSet === 'COMPLETELY_UNRELATED_KEY')).toBeUndefined();
   });
 });
+
+describe('groupReadyByProvider — openai-codex OAuth auto-pick', () => {
+  const NO_STORES = {
+    GBRAIN_HOME: `/tmp/gbrain-init-detect-${process.pid}-none`,
+    CODEX_HOME: `/tmp/gbrain-init-detect-${process.pid}-none-codex`,
+  };
+
+  test('no token store and no env keys → openai-codex not ready', async () => {
+    const got = await groupReadyByProvider('embedding', { ...NO_STORES });
+    expect(got.map(p => p.recipeId)).not.toContain('openai-codex');
+  });
+
+  test('injected access token env → openai-codex auto-picks', async () => {
+    const got = await groupReadyByProvider('embedding', {
+      ...NO_STORES,
+      GBRAIN_CODEX_ACCESS_TOKEN: 'test-token',
+    });
+    expect(got.map(p => p.recipeId)).toContain('openai-codex');
+  });
+
+  test('codex-auth.json in GBRAIN_HOME store → openai-codex auto-picks', async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const home = mkdtempSync(join(tmpdir(), 'gbrain-init-detect-'));
+    try {
+      mkdirSync(join(home, '.gbrain'), { recursive: true });
+      writeFileSync(join(home, '.gbrain', 'codex-auth.json'), JSON.stringify({
+        auth_mode: 'chatgpt',
+        tokens: { access_token: 'a.b.c', refresh_token: 'r', account_id: null },
+        last_refresh: new Date().toISOString(),
+      }));
+      const got = await groupReadyByProvider('embedding', {
+        GBRAIN_HOME: home,
+        CODEX_HOME: NO_STORES.CODEX_HOME,
+      });
+      expect(got.map(p => p.recipeId)).toContain('openai-codex');
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('local-only providers (empty auth_env, no authReady) still excluded', async () => {
+    const got = await groupReadyByProvider('embedding', { ...NO_STORES });
+    expect(got.map(p => p.recipeId)).not.toContain('ollama');
+  });
+});

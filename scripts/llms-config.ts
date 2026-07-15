@@ -168,6 +168,13 @@ export const SECTIONS: DocSection[] = [
     heading: "AI providers",
     entries: [
       {
+        title: "docs/ai-providers/openai-codex.md",
+        description:
+          "OpenAI embeddings through ChatGPT/Codex OAuth: browser login, token-store precedence, automatic rotation, long-lived refresh, and billing caveats.",
+        path: "docs/ai-providers/openai-codex.md",
+        includeInFull: false,
+      },
+      {
         title: "docs/ai-providers/zeroentropy.md",
         description:
           "ZeroEntropy zembed-1 embedding + zerank-2 reranker (hosted): API key, embedding switch, reranker config.",

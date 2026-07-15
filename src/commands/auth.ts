@@ -24,6 +24,12 @@ import { loadConfig, toEngineConfig } from '../core/config.ts';
 import { createEngine } from '../core/engine-factory.ts';
 import type { BrainEngine } from '../core/engine.ts';
 import { sqlQueryForEngine, executeRawJsonb, type SqlQuery } from '../core/sql-query.ts';
+import {
+  getCodexAuthStatus,
+  loginCodexOAuth,
+  logoutCodexOAuth,
+  type CodexAuthStatus,
+} from '../core/ai/codex-oauth.ts';
 
 function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -479,9 +485,56 @@ export function parseAuthCreateArgs(rest: string[]): { name: string; takesHolder
   return { name: positional || '', takesHolders };
 }
 
+function printCodexAuthStatus(status: CodexAuthStatus): void {
+  if (!status.authenticated) {
+    console.log('ChatGPT/Codex OAuth: not logged in');
+    if (status.hint) console.log(`  Setup:        ${status.hint}`);
+    return;
+  }
+  console.log('ChatGPT/Codex OAuth: logged in');
+  console.log(`  Source:       ${status.source}`);
+  console.log(`  File:         ${status.path}`);
+  if (status.accountId) console.log(`  Account ID:   ${status.accountId}`);
+  if (status.email) console.log(`  Email:        ${status.email}`);
+  if (status.planType) console.log(`  Plan:         ${status.planType}`);
+  if (status.expiresAt) console.log(`  Access expiry:${status.expiresAt}`);
+  if (status.lastRefresh) console.log(`  Last refresh: ${status.lastRefresh}`);
+}
+
 export async function runAuth(args: string[]): Promise<void> {
   const [cmd, ...rest] = args;
   switch (cmd) {
+    case 'login': {
+      const unknown = rest.filter(arg => arg !== '--no-browser');
+      if (unknown.length > 0) {
+        console.error(`Unknown auth login option: ${unknown[0]}`);
+        console.error('Usage: gbrain auth login [--no-browser]');
+        process.exit(1);
+      }
+      console.log('Starting ChatGPT/Codex OAuth login.');
+      const status = await loginCodexOAuth({
+        noBrowser: rest.includes('--no-browser'),
+        onUrl: url => {
+          console.log('Open this URL to continue:');
+          console.log(url);
+        },
+      });
+      console.log('Login complete.');
+      printCodexAuthStatus(status);
+      return;
+    }
+    case 'logout': {
+      const result = await logoutCodexOAuth();
+      if (result.removed) console.log('Removed gbrain ChatGPT/Codex OAuth login.');
+      else console.log('No gbrain-owned ChatGPT/Codex OAuth login was present.');
+      if (result.codexCliFallback) {
+        console.log('The Codex CLI login is still available to gbrain. Run `codex logout` to remove it.');
+      }
+      return;
+    }
+    case 'status':
+      printCodexAuthStatus(getCodexAuthStatus());
+      return;
     case 'create': {
       // v0.28: optional --takes-holders world,garry,brain (default: world only)
       const parsed = parseAuthCreateArgs(rest);
@@ -508,6 +561,9 @@ export async function runAuth(args: string[]): Promise<void> {
       console.log(`GBrain Token Management
 
 Usage:
+  gbrain auth login [--no-browser]                        Sign in with ChatGPT/Codex OAuth for embeddings
+  gbrain auth logout                                      Remove only gbrain's OAuth login (never Codex CLI auth)
+  gbrain auth status                                      Show OAuth source/account/expiry without tokens
   gbrain auth create <name> [--takes-holders world,garry,brain]
                                                           Create a legacy bearer token. v0.28: --takes-holders
                                                           sets the per-token allow-list for the takes.holder

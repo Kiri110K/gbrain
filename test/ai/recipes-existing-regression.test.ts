@@ -183,7 +183,7 @@ describe('IRON RULE: existing 9 recipes survive the v0.32 resolveAuth refactor',
     }
   });
 
-  test('only Azure overrides resolveAuth in v0.32 (default applies elsewhere)', () => {
+  test('only custom-header/dynamic-OAuth recipes override resolveAuth', () => {
     // The default resolver covers every openai-compatible recipe except
     // Azure, which uses the api-key custom-header path. The IRON RULE
     // contract: any new override beyond Azure must be reviewed for
@@ -191,7 +191,7 @@ describe('IRON RULE: existing 9 recipes survive the v0.32 resolveAuth refactor',
     const overrides = listRecipes().filter(
       r => r.implementation === 'openai-compatible' && r.resolveAuth,
     );
-    expect(overrides.map(r => r.id).sort()).toEqual(['azure-openai']);
+    expect(overrides.map(r => r.id).sort()).toEqual(['azure-openai', 'openai-codex']);
   });
 });
 
@@ -335,4 +335,3 @@ describe('default_headers / resolveDefaultHeaders contract (v0.37.2.0)', () => {
     expect(e.headers).toEqual({ 'X-Static': 'static-val' });
   });
 });
-

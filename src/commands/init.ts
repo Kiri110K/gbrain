@@ -353,8 +353,11 @@ export async function groupReadyByProvider(
     if ((tp as { user_provided_models?: boolean }).user_provided_models) continue;
     // Skip local-only providers (no auth required) from auto-pick. They're
     // still picker-selectable explicitly, but silent auto-pick is wrong UX.
+    // Providers with an authReady hook (external credentials, e.g. a
+    // ChatGPT/Codex OAuth token file) are NOT local-only: envReady defers to
+    // the hook, so they auto-pick only when a real login exists.
     const required = r.auth_env?.required ?? [];
-    if (required.length === 0) continue;
+    if (required.length === 0 && !r.authReady) continue;
     if (envReady(r, env)) {
       ready.push({ recipeId: r.id, recipe: r });
       seen.add(r.id);
@@ -399,6 +402,8 @@ function printNoEmbeddingProviderHint(typos: Array<{ userSet: string; suggested:
   console.error('  export OPENAI_API_KEY=sk-…        # openai:text-embedding-3-large (1536d)');
   console.error('  export ZEROENTROPY_API_KEY=ze-…   # zeroentropyai:zembed-1 (2560d, Matryoshka)');
   console.error('  export VOYAGE_API_KEY=pa-…        # voyage:voyage-3-large (1024d)');
+  console.error('Or sign in without an API key:');
+  console.error('  gbrain auth login                 # openai-codex:… via ChatGPT/Codex OAuth');
   console.error('Then re-run: gbrain init --pglite');
   console.error('');
   console.error('Or pick explicitly:');
@@ -439,9 +444,11 @@ async function resolveEmbeddingByEnv(out: ResolvedAIOptions, nonInteractive: boo
         : tp.default_dims;
       out.embedding_model = fullModel;
       out.embedding_dimensions = dims;
+      const detected = r.auth_env?.required?.[0]
+        ? `Detected ${r.auth_env.required[0]} env var.`
+        : `Detected ${r.name} login.`;
       console.error(
-        `Detected ${r.auth_env?.required?.[0] ?? r.id} env var. ` +
-        `Using ${fullModel} (${dims}d). ` +
+        `${detected} Using ${fullModel} (${dims}d). ` +
         `Override with --embedding-model.`,
       );
       return;

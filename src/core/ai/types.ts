@@ -286,6 +286,14 @@ export interface Recipe {
     token: string;
   };
   /**
+   * Optional synchronous readiness check for providers whose credentials are
+   * stored outside env vars (for example a local OAuth token file). This keeps
+   * diagnoseEmbedding()/isAvailable() truthful without making their long-lived
+   * synchronous API async. Actual network validity remains the request probe's
+   * responsibility.
+   */
+  authReady?(env: Record<string, string | undefined>): { ready: boolean; hint?: string };
+  /**
    * v0.37.6.0: static request headers applied to every openai-compatible
    * touchpoint (embedding, expansion, chat, reranker). Use for static-per-recipe
    * attribution headers (OpenRouter's HTTP-Referer + X-OpenRouter-Title).

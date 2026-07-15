@@ -8,6 +8,11 @@
 import { describe, test, expect } from 'bun:test';
 import { formatRecipeTable, envReady } from '../src/commands/providers.ts';
 import { listRecipes, getRecipe } from '../src/core/ai/recipes/index.ts';
+
+const NO_OAUTH_ENV = {
+  GBRAIN_HOME: `/tmp/gbrain-provider-tests-${process.pid}-no-auth`,
+  CODEX_HOME: `/tmp/gbrain-provider-tests-${process.pid}-no-codex-auth`,
+};
 import type { Recipe } from '../src/core/ai/types.ts';
 
 describe('envReady', () => {
@@ -37,7 +42,7 @@ describe('envReady', () => {
 
 describe('formatRecipeTable', () => {
   test('header row present', () => {
-    const out = formatRecipeTable(listRecipes(), {});
+    const out = formatRecipeTable(listRecipes(), NO_OAUTH_ENV);
     expect(out).toContain('PROVIDER');
     expect(out).toContain('TIER');
     expect(out).toContain('EMBED');
@@ -47,7 +52,7 @@ describe('formatRecipeTable', () => {
   });
 
   test('shows ✓ ready for env-satisfied provider', () => {
-    const out = formatRecipeTable(listRecipes(), { OPENAI_API_KEY: 'sk-test' });
+    const out = formatRecipeTable(listRecipes(), { ...NO_OAUTH_ENV, OPENAI_API_KEY: 'sk-test' });
     // openai row should be ready
     const openaiLine = out.split('\n').find(line => line.startsWith('openai'));
     expect(openaiLine).toBeDefined();
@@ -55,7 +60,7 @@ describe('formatRecipeTable', () => {
   });
 
   test('shows ✗ missing <ENV> for missing provider', () => {
-    const out = formatRecipeTable(listRecipes(), {});
+    const out = formatRecipeTable(listRecipes(), NO_OAUTH_ENV);
     // openai should show missing OPENAI_API_KEY
     const openaiLine = out.split('\n').find(line => line.startsWith('openai'));
     expect(openaiLine).toBeDefined();
@@ -63,7 +68,7 @@ describe('formatRecipeTable', () => {
   });
 
   test('each recipe appears at most once', () => {
-    const out = formatRecipeTable(listRecipes(), {});
+    const out = formatRecipeTable(listRecipes(), NO_OAUTH_ENV);
     const recipes = listRecipes();
     for (const r of recipes) {
       const occurrences = out.split('\n').filter(line => line.startsWith(`${r.id} `) || line.startsWith(`${r.id}  `));
@@ -72,7 +77,7 @@ describe('formatRecipeTable', () => {
   });
 
   test('embedding-only recipe (zeroentropyai) shows yes/—/— for tiers', () => {
-    const out = formatRecipeTable(listRecipes(), {});
+    const out = formatRecipeTable(listRecipes(), NO_OAUTH_ENV);
     const zeLine = out.split('\n').find(line => line.startsWith('zeroentropyai'));
     expect(zeLine).toBeDefined();
     // ZE has embedding but no expansion or chat

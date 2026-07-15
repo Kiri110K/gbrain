@@ -1,6 +1,6 @@
 # Embedding providers
 
-GBrain ships with 16 embedding-provider recipes covering OpenAI, ZeroEntropy, Voyage, OpenRouter (single key, many hosted models), the major hosted alternatives, three local options, and a universal escape hatch (LiteLLM proxy). Run `gbrain providers list` to see the live registry; `gbrain providers explain --json` emits a machine-readable matrix for agents.
+GBrain ships with 17 embedding-provider recipes covering OpenAI, subscription-backed OpenAI through ChatGPT/Codex OAuth, ZeroEntropy, Voyage, OpenRouter (single key, many hosted models), the major hosted alternatives, three local options, and a universal escape hatch (LiteLLM proxy). Run `gbrain providers list` to see the live registry; `gbrain providers explain --json` emits a machine-readable matrix for agents.
 
 This page is the human-readable counterpart: capability per provider, env-var setup, dimensions, cost, and known constraints.
 
@@ -25,6 +25,7 @@ The resolved provider + dimensions get persisted to `~/.gbrain/config.json` atom
 |---|---|---|---|---|---|
 | `zeroentropyai` | `ZEROENTROPY_API_KEY` | 2560 (Matryoshka to 1280/640/320/...) | 0.05 | no | no |
 | `openai` | `OPENAI_API_KEY` | 1536 | 0.13 | no | no |
+| `openai-codex` | ChatGPT/Codex OAuth (`gbrain auth login`) | 1536 | OpenAI model price | no | no |
 | `openrouter` | `OPENROUTER_API_KEY` | 1536 | 0.02 | no | model-dependent |
 | `voyage` | `VOYAGE_API_KEY` | 1024 | 0.18 | no | yes (`voyage-multimodal-3`) |
 | `google` | `GOOGLE_GENERATIVE_AI_API_KEY` | 768 | 0.025 | no | no |
@@ -78,6 +79,10 @@ The doctor distinguishes two repair paths:
 Default. Set `OPENAI_API_KEY`. Models: `text-embedding-3-large` (3072 max, 1536 default), `text-embedding-3-small` (1536). Matryoshka via the `dimensions` field — gbrain pins it from `embedding_dimensions` config so existing 1536-dim brains stay aligned across SDK upgrades.
 
 Optional `OPENAI_BASE_URL` — point the native OpenAI provider at an OpenAI-compatible gateway. A bare host is normalized to carry the `/v1` suffix automatically (so `https://gw.example.com` and `https://gw.example.com/v1` both work); when unset, the SDK's default endpoint is untouched. `ANTHROPIC_BASE_URL` gets the same normalization for Anthropic chat/expansion calls.
+
+### OpenAI through ChatGPT/Codex OAuth
+
+Use `openai-codex:text-embedding-3-small` or `openai-codex:text-embedding-3-large` when you want OpenAI embeddings without `OPENAI_API_KEY`. Authenticate with `gbrain auth login`, or reuse an existing Codex CLI login. Tokens are refreshed automatically. Full setup, storage precedence, logout behavior, refresh/race semantics, and billing caveats are in [OpenAI Codex OAuth embeddings](../ai-providers/openai-codex.md).
 
 ### Voyage AI
 

@@ -5581,6 +5581,12 @@ export async function buildChecks(
     const alternatives: string[] = [];
     for (const r of listRecipes()) {
       if (r.id === configuredId) continue;
+      // OAuth/file-backed providers have no required env key, but may still
+      // be a truthful ready alternative through Recipe.authReady.
+      if (r.authReady?.({ ...process.env }).ready) {
+        if (r.touchpoints.embedding) alternatives.push(r.id);
+        continue;
+      }
       const required = r.auth_env?.required ?? [];
       // Skip recipes with no required env (they're "always available" — not a
       // useful signal) and recipes that require env we don't have.

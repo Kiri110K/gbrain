@@ -8,7 +8,8 @@
 import { listRecipes, getRecipe } from '../core/ai/recipes/index.ts';
 import { configureGateway, embedOne, isAvailable as gwIsAvailable, chat as gwChat } from '../core/ai/gateway.ts';
 import { probeOllama, probeLMStudio } from '../core/ai/probes.ts';
-import { loadConfig } from '../core/config.ts';
+import { loadConfig, type GBrainConfig } from '../core/config.ts';
+import { buildGatewayConfigWithAuth } from '../core/ai/build-gateway-config.ts';
 import { AIConfigError, AITransientError } from '../core/ai/errors.ts';
 import type { Recipe } from '../core/ai/types.ts';
 
@@ -31,20 +32,14 @@ interface ProviderOption {
   cons: string[];
 }
 
-function configureFromEnv(): void {
+async function configureFromEnv(): Promise<void> {
   const config = loadConfig();
-  configureGateway({
-    embedding_model: config?.embedding_model,
-    embedding_dimensions: config?.embedding_dimensions,
-    expansion_model: config?.expansion_model,
-    chat_model: config?.chat_model,
-    chat_fallback_chain: config?.chat_fallback_chain,
-    base_urls: config?.provider_base_urls,
-    env: { ...process.env },
-  });
+  configureGateway(await buildGatewayConfigWithAuth(config ?? ({} as GBrainConfig)));
 }
 
 export function envReady(recipe: Recipe, env: NodeJS.ProcessEnv = process.env): boolean {
+  const authStatus = recipe.authReady?.(env);
+  if (authStatus) return authStatus.ready;
   const required = recipe.auth_env?.required ?? [];
   if (required.length === 0) return true; // e.g. local Ollama
   return required.every(k => !!env[k]);
@@ -89,7 +84,7 @@ export function formatRecipeTable(recipes: Recipe[], env: NodeJS.ProcessEnv = pr
 }
 
 export async function runProviders(subcommand: string | undefined, args: string[]): Promise<void> {
-  configureFromEnv();
+  await configureFromEnv();
 
   switch (subcommand) {
     case 'list':
@@ -405,6 +400,7 @@ function prosFor(r: Recipe, touchpoint: TouchpointFilter): string[] {
     return out;
   }
   if (r.id === 'openai') out.push('Default', 'High quality', 'Wide compatibility');
+  else if (r.id === 'openai-codex') out.push('ChatGPT/Codex OAuth', 'No OPENAI_API_KEY required');
   else if (r.id === 'google') out.push('Smaller vectors', 'Matryoshka dim flex');
   else if (r.id === 'anthropic') out.push('Default expansion model', 'Best-in-class reasoning');
   else if (r.id === 'ollama') out.push('Local', 'Free', 'Private');

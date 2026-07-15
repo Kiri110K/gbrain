@@ -20,6 +20,15 @@ describe('lookupEmbeddingPrice — first-class providers', () => {
     if (r.kind === 'known') expect(r.pricePerMTok).toBe(0.13);
   });
 
+  test('OpenAI Codex OAuth uses the same non-zero OpenAI price rows', () => {
+    expect(lookupEmbeddingPrice('openai-codex:text-embedding-3-large')).toEqual({
+      kind: 'known', pricePerMTok: 0.13, key: 'openai-codex:text-embedding-3-large',
+    });
+    expect(lookupEmbeddingPrice('openai-codex:text-embedding-3-small')).toEqual({
+      kind: 'known', pricePerMTok: 0.02, key: 'openai-codex:text-embedding-3-small',
+    });
+  });
+
   test('Voyage voyage-3-large at $0.18/MTok', () => {
     const r = lookupEmbeddingPrice('voyage:voyage-3-large');
     expect(r.kind).toBe('known');

@@ -18,6 +18,7 @@
 
 import type { GBrainConfig } from '../config.ts';
 import type { AIGatewayConfig } from './types.ts';
+import { prepareCodexOAuthEnv } from './codex-oauth.ts';
 
 export function buildGatewayConfig(c: GBrainConfig): AIGatewayConfig {
   // v0.32 (#121 reworked): when ~/.gbrain/config.json declares
@@ -75,4 +76,22 @@ export function buildGatewayConfig(c: GBrainConfig): AIGatewayConfig {
       ),
     },
   };
+}
+
+/**
+ * Async gateway-build path for credential providers that may refresh tokens.
+ * Missing OAuth is deliberately non-fatal here; readiness/preflight reports it
+ * only when the selected provider actually needs it.
+ */
+export async function buildGatewayConfigWithAuth(c: GBrainConfig): Promise<AIGatewayConfig> {
+  const cfg = buildGatewayConfig(c);
+  cfg.env = await prepareCodexOAuthEnv(cfg.env, [
+    cfg.embedding_model,
+    cfg.embedding_multimodal_model,
+    cfg.expansion_model,
+    cfg.chat_model,
+    cfg.reranker_model,
+    ...(cfg.chat_fallback_chain ?? []),
+  ]);
+  return cfg;
 }

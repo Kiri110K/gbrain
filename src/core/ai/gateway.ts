@@ -693,6 +693,7 @@ export type EmbeddingDiagnosis =
   | { ok: false; reason: 'unknown_provider'; model: string; provider: string; message: string }
   | { ok: false; reason: 'no_touchpoint'; model: string; provider: string; recipeId: string }
   | { ok: false; reason: 'user_provided_dims_unset'; model: string; provider: string; recipeId: string }
+  | { ok: false; reason: 'auth_unavailable'; model: string; provider: string; recipeId: string; hint?: string }
   | { ok: false; reason: 'missing_env'; model: string; provider: string; recipeId: string; missingEnvVars: string[] };
 
 export function diagnoseEmbedding(modelOverride?: string): EmbeddingDiagnosis {
@@ -761,6 +762,18 @@ export function diagnoseEmbedding(modelOverride?: string): EmbeddingDiagnosis {
       model: modelStr,
       provider: parsed.providerId,
       recipeId: recipe.id,
+    };
+  }
+
+  const authStatus = recipe.authReady?.(_config!.env);
+  if (authStatus && !authStatus.ready) {
+    return {
+      ok: false,
+      reason: 'auth_unavailable',
+      model: modelStr,
+      provider: parsed.providerId,
+      recipeId: recipe.id,
+      hint: authStatus.hint,
     };
   }
 

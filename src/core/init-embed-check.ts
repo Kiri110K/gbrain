@@ -29,7 +29,7 @@
 
 import type { GBrainConfig } from './config.ts';
 import { loadConfigFileOnly } from './config.ts';
-import { buildGatewayConfig } from './ai/build-gateway-config.ts';
+import { buildGatewayConfigWithAuth } from './ai/build-gateway-config.ts';
 import type { EmbeddingDiagnosis } from './ai/gateway.ts';
 
 export interface InitEmbedCheckResult {
@@ -119,6 +119,10 @@ function formatInitEmbedWarning(d: Exclude<EmbeddingDiagnosis, { ok: true }>): s
       lines.push(`  Provider "${d.provider}" ships no default embedding dimension — set one explicitly.`);
       lines.push(`    re-run: gbrain init --embedding-dimensions <N>   (e.g. 1024 for bge-large)`);
       break;
+    case 'auth_unavailable':
+      lines.push(`  Model "${d.model}" is not authenticated.`);
+      lines.push(`  ${d.hint ?? 'Run `gbrain auth login`.'}`);
+      break;
     case 'no_model_configured':
       lines.push('  No embedding model is configured.');
       break;
@@ -175,7 +179,7 @@ export async function runInitEmbedCheck(opts: RunInitEmbedCheckOpts): Promise<In
   };
 
   const { configureGateway, diagnoseEmbedding } = await import('./ai/gateway.ts');
-  configureGateway(buildGatewayConfig(effective));
+  configureGateway(await buildGatewayConfigWithAuth(effective));
 
   const diag = diagnoseEmbedding();
   if (!diag.ok) {

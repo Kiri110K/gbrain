@@ -28,6 +28,23 @@ describe('embeddingProviderConfigured (recipe-aware helper)', () => {
     expect(embeddingProviderConfigured('llama-server:my-gguf', alwaysFalse)).toBe(true);
   });
 
+  test('OAuth providers use their external credential readiness hook', () => {
+    const noAuth = {
+      GBRAIN_HOME: `/tmp/gbrain-score-${process.pid}-no-auth`,
+      CODEX_HOME: `/tmp/gbrain-score-${process.pid}-no-codex-auth`,
+    };
+    expect(embeddingProviderConfigured(
+      'openai-codex:text-embedding-3-small',
+      alwaysFalse,
+      noAuth,
+    )).toBe(false);
+    expect(embeddingProviderConfigured(
+      'openai-codex:text-embedding-3-small',
+      alwaysFalse,
+      { ...noAuth, GBRAIN_CODEX_ACCESS_TOKEN: 'injected-test-token' },
+    )).toBe(true);
+  });
+
   test('hosted provider configured iff its required key resolves', () => {
     expect(embeddingProviderConfigured('openai:text-embedding-3-small', (k) => k === 'OPENAI_API_KEY')).toBe(true);
     // REGRESSION: hosted without its key still blocks.

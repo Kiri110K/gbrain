@@ -30,6 +30,7 @@ Repo: https://github.com/garrytan/gbrain
 
 ## AI providers
 
+- [docs/ai-providers/openai-codex.md](https://raw.githubusercontent.com/garrytan/gbrain/master/docs/ai-providers/openai-codex.md): OpenAI embeddings through ChatGPT/Codex OAuth: browser login, token-store precedence, automatic rotation, long-lived refresh, and billing caveats.
 - [docs/ai-providers/zeroentropy.md](https://raw.githubusercontent.com/garrytan/gbrain/master/docs/ai-providers/zeroentropy.md): ZeroEntropy zembed-1 embedding + zerank-2 reranker (hosted): API key, embedding switch, reranker config.
 - [docs/ai-providers/llama-server-reranker.md](https://raw.githubusercontent.com/garrytan/gbrain/master/docs/ai-providers/llama-server-reranker.md): Local reranker via llama.cpp --reranking: Qwen3-Reranker or self-hosted ZE weights, --alias setup, gbrain config keys, cold-start timeout, budget-cap interaction.
 

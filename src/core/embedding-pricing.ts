@@ -31,6 +31,10 @@ export const EMBEDDING_PRICING: Record<string, EmbeddingPricing> = {
   'openai:text-embedding-3-small': { pricePerMTok: 0.02 },
   // Legacy OpenAI ada (still common in older brains)
   'openai:text-embedding-ada-002': { pricePerMTok: 0.10 },
+  // Same OpenAI API endpoint/models, authenticated through ChatGPT/Codex OAuth.
+  'openai-codex:text-embedding-3-large': { pricePerMTok: 0.13 },
+  'openai-codex:text-embedding-3-small': { pricePerMTok: 0.02 },
+  'openai-codex:text-embedding-ada-002': { pricePerMTok: 0.10 },
   // Voyage (https://www.voyageai.com/pricing)
   'voyage:voyage-3-large':         { pricePerMTok: 0.18 },
   'voyage:voyage-3':               { pricePerMTok: 0.06 },
